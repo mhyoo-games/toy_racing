@@ -236,7 +236,8 @@ func _physics_process(dt: float) -> void:
 		for h in humans:
 			var k: Dictionary = h.k
 			Sound.engine(h.who, absf(Rules.speed_of(k)) / maxf(1.0, h.st.max_speed), Rules.boosting(k), humans.size())
-			Sound.skid(h.who, k.drift and state != "count")
+			var slide: float = clampf(absf(float(k.slip)) / 0.4, 0.0, 1.0) * clampf(k.vel.length() / 24.0, 0.0, 1.0)
+			Sound.skid(h.who, (k.drift or absf(float(k.slip)) > 0.15) and state != "count", maxf(slide, 0.35 if k.drift else 0.0), humans.size())
 	if _wait_remote > 0.0 and end_wait < 0.0:
 		_wait_remote -= dt
 		if _wait_remote <= 0.0 or remote_human.finish >= 0.0 or not Net.connected():
@@ -366,7 +367,7 @@ func _events(r: Dictionary) -> void:
 	for e in r.k.events:
 		match e:
 			"drift_start":
-				pass
+				Sound.play("screech", -3.0 if humans.size() == 1 else -7.0, randf_range(0.95, 1.06))
 			"mini_boost":
 				hud.say("순간부스터!", Color(0.5, 1.0, 0.6))
 				Sound.play("mini")
@@ -446,13 +447,17 @@ func _cameras(dt: float) -> void:
 		var target_yaw: float = k.yaw
 		if v.length() > 4.0:
 			# 드리프트하면 가는 방향 쪽에서 비스듬히 보이게
-			target_yaw = lerp_angle(k.yaw, atan2(v.x, v.y), 0.55)
-		c.yaw = lerp_angle(c.yaw, target_yaw, 1.0 - exp(-5.0 * dt))
+			target_yaw = lerp_angle(k.yaw, atan2(v.x, v.y), 0.45)
+		# 카메라는 천천히 돌아 따라온다 (회전 속도도 부드럽게)
+		var want_rate := wrapf(target_yaw - float(c.yaw), -PI, PI) * 3.6
+		c.rate = lerpf(float(c.get("rate", 0.0)), want_rate, 1.0 - exp(-8.0 * dt))
+		c.yaw = float(c.yaw) + float(c.rate) * dt
 		var p: Vector2 = k.pos
 		var f := Rules.fwd(c.yaw)
 		var spd := absf(Rules.speed_of(k))
-		var back := 6.4 + spd * 0.04
-		var pos := Vector3(p.x - f.x * back, 2.9 + spd * 0.015, p.y - f.y * back)
+		c.spd = lerpf(float(c.get("spd", 0.0)), spd, 1.0 - exp(-2.0 * dt))
+		var back := 6.4 + float(c.spd) * 0.04
+		var pos := Vector3(p.x - f.x * back, 2.9 + float(c.spd) * 0.015, p.y - f.y * back)
 		var cam: Camera3D = c.cam
 		if c.shake > 0.0:
 			c.shake = maxf(0.0, c.shake - dt)
@@ -460,7 +465,7 @@ func _cameras(dt: float) -> void:
 		cam.position = pos
 		cam.look_at(Vector3(p.x + f.x * 3.0, 1.0, p.y + f.y * 3.0), Vector3.UP)
 		var want := 68.0 + (12.0 if k.boost_t > 0.0 else (6.0 if k.mini_t > 0.0 else 0.0)) + spd * 0.12
-		c.fov = lerpf(c.fov, want, 1.0 - exp(-4.0 * dt))
+		c.fov = lerpf(c.fov, want, 1.0 - exp(-2.2 * dt))
 		cam.fov = c.fov
 
 func _check_end() -> void:

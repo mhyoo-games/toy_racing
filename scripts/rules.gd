@@ -10,6 +10,10 @@ const MAX_BOOSTS := 2            ## 부스터는 두 개까지 모은다
 const MINI_WINDOW := 0.35        ## 드리프트가 끝난 뒤 순간부스터를 쓸 수 있는 시간(초)
 const START_WINDOW := 0.4        ## 출발 직전 이 시간 안에 가속을 누르면 출발 부스터
 const DRIFT_MIN_SPEED := 9.0
+const STEER_IN := 5.5            ## 핸들이 꺾이는 빠르기 (1/초, 끝까지 약 0.18초)
+const STEER_OUT := 9.0           ## 핸들을 놓을 때 돌아오는 빠르기
+const DRIFT_GRIP := 5.0          ## 드리프트 중 가는 방향이 코를 따라가는 빠르기 (낮을수록 많이 미끄러짐)
+const RECOVER_TIME := 0.42       ## 드리프트가 끝난 뒤 접지가 다 돌아오는 시간 (그동안 속도를 거의 안 잃음 = 끊어 타기·커팅)
 
 # ────────────────────────── 카트 능력치 ──────────────────────────
 
@@ -21,7 +25,7 @@ static func kart_stats(def: Dictionary) -> Dictionary:
 		"max_speed": 27.0 + g.call("speed") * 0.9,      # 27.9 ~ 36
 		"accel": 13.0 + g.call("accel") * 1.7,          # 14.7 ~ 30
 		"turn": 1.55 + g.call("handling") * 0.11,       # 초당 회전(라디안)
-		"grip": 7.0 + g.call("handling") * 0.5,         # 옆으로 미끄러짐이 사라지는 빠르기
+		"grip": 14.0 + g.call("handling") * 0.9,        # 보통 때 가는 방향이 코를 따라가는 빠르기
 		"drift_gain": 0.30 + g.call("drift") * 0.045,   # 드리프트 게이지가 차는 빠르기
 		"boost_time": 1.7 + g.call("boost") * 0.09,     # 부스터 길이(초)
 		"boost_mult": 1.34,
@@ -35,6 +39,7 @@ static func new_kart(pos: Vector2, yaw: float) -> Dictionary:
 		"drift": false, "drift_dir": 0, "drift_time": 0.0,
 		"gauge": 0.0, "boosts": 0, "boost_t": 0.0, "mini_t": 0.0, "window_t": 0.0,
 		"slip": 0.0, "offroad": false, "events": [],
+		"steer_s": 0.0, "recover": 1.0,
 	}
 
 static func fwd(yaw: float) -> Vector2:
@@ -53,7 +58,7 @@ static func boosting(k: Dictionary) -> bool:
 static func top_speed(k: Dictionary, st: Dictionary) -> float:
 	var top: float = st.max_speed
 	if k.offroad:
-		# 잔디는 느리다. 부스터를 쓰면 덜 느려져서 부스터 커팅이 된다.
+		# 잔디는 느리다. 부스터를 쓰면 덜 느려져서 부스터 지름길이 된다.
 		top *= 0.86 if boosting(k) else 0.55
 	if k.boost_t > 0.0:
 		top *= st.boost_mult
@@ -63,90 +68,118 @@ static func top_speed(k: Dictionary, st: Dictionary) -> float:
 
 ## 한 프레임 주행. inp = {throttle: -1..1, steer: -1..1(오른쪽 +), drift: bool, accel_tap: bool, use_boost: bool}
 ## 소리·글자용 사건은 k.events 에 쌓는다 (부르는 쪽이 비운다).
+##
+## 모델: 속도는 크기(sp)와 방향(va)으로 나눈다. 핸들은 코(yaw)를 돌리고, 가는 방향(va)은 접지력만큼 코를 따라간다.
+##   보통 때는 접지력이 커서 거의 바로 따라가고, 드리프트 중에는 작아서 옆으로 미끄러진다(미끄러짐 각 ≈ 회전 속도 / 접지력).
+##   방향만 돌 뿐 속도 크기는 미끄러지는 만큼만 조금씩 준다 → 드리프트해도 속도가 살아 있다.
+##   드리프트가 끝나면 접지력이 RECOVER_TIME에 걸쳐 돌아온다 → Shift를 짧게 끊어 치면 속도를 잃지 않고 방향만 꺾인다(커팅).
 static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> void:
-	var f := fwd(k.yaw)
-	var r := right(k.yaw)
-	var vel: Vector2 = k.vel
-	var vf := vel.dot(f)
-	var vl := vel.dot(r)
 	var throttle: float = clampf(float(inp.get("throttle", 0.0)), -1.0, 1.0)
-	var steer: float = clampf(float(inp.get("steer", 0.0)), -1.0, 1.0)
+	var raw: float = clampf(float(inp.get("steer", 0.0)), -1.0, 1.0)
+	# ── 핸들을 부드럽게 (키보드도 0 → 1 이 한 번에 가지 않게)
+	var cur: float = k.steer_s
+	var rate := STEER_OUT
+	if raw != 0.0 and (cur == 0.0 or signf(raw) == signf(cur)) and absf(raw) > absf(cur):
+		rate = STEER_IN
+	k.steer_s = move_toward(cur, raw, rate * dt)
+	var steer: float = k.steer_s
+
+	var vel: Vector2 = k.vel
+	var sp := vel.length()
+	var yaw: float = k.yaw
+	var va := atan2(vel.x, vel.y) if sp > 0.3 else yaw
+	var backward := sp > 0.3 and vel.dot(fwd(yaw)) < 0.0
+	if backward:
+		sp = -sp
+		va = yaw
 	var top := top_speed(k, st)
 
-	# ── 가속·감속
-	if boosting(k) and throttle >= 0.0:
-		vf = move_toward(vf, top, 55.0 * dt)
-	elif throttle > 0.0:
-		if vf < top:
-			var curve := 1.0 - 0.55 * clampf(vf / top, 0.0, 1.0)
-			vf = minf(top, vf + st.accel * throttle * curve * dt)
-	elif throttle < 0.0:
-		if vf > 0.5:
-			vf = maxf(0.0, vf - 38.0 * dt)
-		else:
-			vf = maxf(-9.0, vf - 14.0 * dt)
-	else:
-		vf = move_toward(vf, 0.0, 5.0 * dt)
-	if vf > top:  # 부스터가 끝났거나 잔디에 들어가면 천천히 최고 속력으로
-		vf = move_toward(vf, top, (30.0 if k.offroad else 14.0) * dt)
-
-	# ── 드리프트 시작: 드리프트 키 + 방향키 + 어느 정도 속력
+	# ── 드리프트 시작: 드리프트 키 + 방향키 + 어느 정도 속력 (방향은 누른 키 그대로)
 	var was_drift: bool = k.drift
-	if inp.get("drift", false) and not k.drift and absf(steer) > 0.3 and vf > DRIFT_MIN_SPEED:
+	if inp.get("drift", false) and not k.drift and absf(raw) > 0.3 and sp > DRIFT_MIN_SPEED:
 		k.drift = true
-		k.drift_dir = 1 if steer > 0.0 else -1
+		k.drift_dir = 1 if raw > 0.0 else -1
 		k.drift_time = 0.0
 		k.events.append("drift_start")
 
-	# ── 핸들
-	var yaw_rate := 0.0
-	var new_yaw: float = k.yaw
+	# ── 코를 돌리는 빠르기(목표)와 따라가는 빠르기
+	var target_w := 0.0
+	var resp := 11.0
+	var grip: float = st.grip
+	var slide_drag := 6.0
+	var ending := false
 	if k.drift:
 		k.drift_time += dt
 		var dir := float(k.drift_dir)
-		var speed := vel.length()
-		var va := atan2(vel.x, vel.y)          # 실제로 가는 방향
+		var push := steer * dir            # +면 미는 쪽, -면 반대(카운터)
 		var released: bool = not inp.get("drift", false)
-		var push := steer * dir                 # +면 미는 쪽, -면 카운터
-		# 가는 길이 굽는 빠르기: 미는 쪽으로 꺾을수록 많이, 카운터면 조금
-		var amt := clampf(0.55 + 0.5 * push, 0.2, 1.05)
-		# 코가 가는 방향보다 안쪽을 보는 각도(미끄러짐 각)
-		var cur_slip := wrapf(va - k.yaw, -PI, PI) * dir
-		va -= dir * st.turn * 1.12 * amt * dt
-		var want := 0.5 * (0.65 + 0.35 * amt)
-		var rate := 6.0
-		var ending := false
+		var amt := clampf(0.62 + 0.42 * push, 0.25, 1.04)
+		target_w = -dir * st.turn * 1.08 * amt
+		resp = 6.5
+		grip = DRIFT_GRIP
+		slide_drag = 2.4
 		if released and push < -0.2:
-			want = 0.0; rate = 9.0; ending = true     # 카운터: 빨리 펴진다
+			# 카운터: 코를 가는 방향 쪽으로 되돌리며 빨리 편다
+			target_w = dir * st.turn * 0.35
+			grip = 9.0
+			ending = true
 		elif released and push < 0.3:
-			want = 0.0; rate = 3.0; ending = true     # 손을 떼면 천천히 펴진다
-		cur_slip = lerpf(cur_slip, want, 1.0 - exp(-rate * dt))
-		new_yaw = va - dir * cur_slip
-		# 속력: 가속 키로 조금 유지, 미끄러지는 만큼 조금 잃는다
-		if throttle > 0.0 and speed < top:
-			speed += st.accel * 0.22 * dt
-		speed -= (0.8 + 2.2 * cur_slip) * dt
-		speed = minf(speed, maxf(top, vf))
-		vel = fwd(va) * speed
-		k.gauge += st.drift_gain * (0.3 + 0.7 * clampf(cur_slip / 0.45, 0.0, 1.0)) * clampf(speed / 20.0, 0.0, 1.0) * dt
-		yaw_rate = wrapf(new_yaw - k.yaw, -PI, PI) / dt
-		k.slip = cur_slip * dir
-		if (ending and cur_slip < 0.08) or speed < 6.0:
-			k.drift = false
-			# 남은 옆 미끄러짐은 일반 손잡이로 넘긴다
+			# 손을 다 떼면 천천히 펴진다
+			target_w = -dir * st.turn * 0.08
+			grip = 7.0
+			ending = true
 	else:
-		var low := clampf(absf(vf) / 7.0, 0.35, 1.0)   # 멈춰 있어도 조금은 돈다
-		var high := 1.0 - 0.22 * clampf(vf / st.max_speed, 0.0, 1.2)
-		yaw_rate = -steer * st.turn * low * high * (1.0 if vf >= 0.0 else -1.0)
-		new_yaw = k.yaw + yaw_rate * dt
-		var nl2 := vl * exp(-st.grip * dt)
-		vf += absf(vl - nl2) * 0.25 * signf(vf)
-		vl = nl2
-		vel = f * vf + r * vl
-		k.slip = vl * 0.05
+		var low := clampf(absf(sp) / 7.0, 0.35, 1.0)   # 멈춰 있어도 조금은 돈다
+		var high := 1.0 - 0.22 * clampf(sp / st.max_speed, 0.0, 1.2)
+		target_w = -steer * st.turn * low * high * (-1.0 if backward else 1.0)
+		# 드리프트가 막 끝났으면 접지가 천천히 돌아온다
+		k.recover = minf(1.0, float(k.recover) + dt / RECOVER_TIME)
+		var rc: float = k.recover
+		grip = lerpf(DRIFT_GRIP + 1.5, st.grip, rc * rc)
+		slide_drag = lerpf(1.5, 6.0, rc)
+	k.yaw_rate = lerpf(float(k.yaw_rate), target_w, 1.0 - exp(-resp * dt))
+	yaw = wrapf(yaw + float(k.yaw_rate) * dt, -PI, PI)
+
+	# ── 가는 방향이 코를 따라간다
+	if not backward:
+		var slip0 := wrapf(va - yaw, -PI, PI)
+		va = yaw + slip0 * exp(-grip * dt)
+	else:
+		va = yaw
+	var slip := wrapf(va - yaw, -PI, PI)
+	var along := cos(slip)                      # 코 방향으로 힘이 얼마나 실리나
+
+	# ── 가속·감속 (속도 크기에)
+	if boosting(k) and throttle >= 0.0:
+		sp = move_toward(sp, top, 55.0 * dt)
+	elif throttle > 0.0:
+		if sp < top:
+			var curve := 1.0 - 0.55 * clampf(sp / top, 0.0, 1.0)
+			sp = minf(top, sp + st.accel * throttle * curve * along * (0.35 if k.drift else 1.0) * dt)
+	elif throttle < 0.0:
+		if sp > 0.5:
+			sp = maxf(0.0, sp - 38.0 * dt)
+		else:
+			sp = maxf(-9.0, sp - 14.0 * dt)
+			va = yaw
+	else:
+		sp = move_toward(sp, 0.0, 5.0 * dt)
+	if sp > top:  # 부스터가 끝났거나 잔디에 들어가면 천천히 최고 속력으로
+		sp = move_toward(sp, top, (30.0 if k.offroad else 14.0) * dt)
+	# 옆으로 미끄러지는 만큼 조금 느려진다
+	if sp > 0.0:
+		sp = maxf(0.0, sp - slide_drag * absf(sin(slip)) * dt * (sp / 20.0))
+
+	# ── 드리프트 게이지·끝
+	if k.drift:
+		k.gauge += st.drift_gain * (0.3 + 0.7 * clampf(absf(slip) / 0.4, 0.0, 1.0)) * clampf(sp / 20.0, 0.0, 1.0) * dt
+		var dir2 := float(k.drift_dir)
+		if (ending and absf(slip) < 0.1) or sp < 6.0 or (k.drift_time > 0.12 and slip * dir2 < -0.05):
+			k.drift = false
 	if was_drift and not k.drift:
 		k.events.append("drift_end")
-		if k.drift_time > 0.3:
+		k.recover = 0.0
+		if k.drift_time > 0.25:
 			k.window_t = MINI_WINDOW
 
 	# ── 순간부스터: 드리프트가 끝난 직후 가속 키를 다시 누른다
@@ -170,9 +203,9 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 		k.boost_t = st.boost_time
 		k.events.append("boost")
 
-	k.yaw = wrapf(new_yaw, -PI, PI)
-	k.yaw_rate = yaw_rate
-	k.vel = vel
+	k.yaw = yaw
+	k.vel = fwd(va) * sp
+	k.slip = slip
 	k.pos = (k.pos as Vector2) + (k.vel as Vector2) * dt
 	k.boost_t = maxf(0.0, k.boost_t - dt)
 	k.mini_t = maxf(0.0, k.mini_t - dt)
@@ -388,7 +421,8 @@ static func ai_input(k: Dictionary, tr: Dictionary, line: PackedFloat32Array, lo
 	var drift := false
 	if k.drift:
 		drift = (k.drift_time < 0.45 or (sharp > 0.3 and signf(bend) == float(k.drift_dir))) and steer * k.drift_dir > -0.3
-	elif sharp > 0.55 and spd > 18.0 and rnd < 0.25 + skill * 0.6:
+	elif sharp > 0.55 and spd > 18.0 and float(k.recover) >= 1.0 and rnd < 0.25 + skill * 0.6 and (absf(steer) < 0.4 or signf(steer) == signf(bend)):
+		# 굽은 쪽으로만 드리프트를 건다
 		drift = true
 		steer = signf(bend) if absf(steer) < 0.4 else steer
 	var throttle := 1.0

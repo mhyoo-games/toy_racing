@@ -19,6 +19,7 @@ func _init() -> void:
 	_data()
 	_driving()
 	_drift_and_boost()
+	_smooth_feel()
 	_track_geometry()
 	_race_rules()
 	_shop_and_save()
@@ -249,3 +250,51 @@ func _net_codes() -> void:
 	var d: Dictionary = Rules.net_decode("  보낸 글: " + code.insert(30, "\n") + "  ")
 	ok(d.get("t") == "offer" and d.get("s") == sdp and d.c.size() == 1, "앞뒤 글자·줄바꿈이 섞여도 읽는다")
 	ok(Rules.net_decode("TR1-망가짐").is_empty() and Rules.net_decode("").is_empty() and Rules.net_decode(code.substr(0, 40)).is_empty(), "망가진 코드는 빈 값")
+
+## 조작감: 핸들·회전이 한 번에 튀지 않는지, 짧게 끊는 드리프트(커팅)가 속도를 안 잃고 방향을 꺾는지
+func _smooth_feel() -> void:
+	var st := Rules.kart_stats(kart("acorn"))
+	var dt := 1.0 / 60.0
+	var mk := func() -> Dictionary:
+		var k := Rules.new_kart(Vector2.ZERO, 0.0)
+		k.vel = Vector2(0, 28)
+		return k
+	# 핸들: 첫 프레임엔 조금만, 0.5초 뒤엔 다 돈다. 프레임마다 회전 속도가 크게 안 튄다
+	var k: Dictionary = mk.call()
+	Rules.step(k, {"throttle": 1.0, "steer": 1.0}, st, dt)
+	var first := absf(k.yaw_rate)
+	var jump := 0.0
+	var prev := absf(k.yaw_rate)
+	for i in 30:
+		Rules.step(k, {"throttle": 1.0, "steer": 1.0}, st, dt)
+		jump = maxf(jump, absf(absf(k.yaw_rate) - prev))
+		prev = absf(k.yaw_rate)
+	ok(first < prev * 0.1, "핸들은 천천히 들어간다 (첫 프레임 %.3f, 0.5초 %.2f)" % [first, prev])
+	ok(jump < prev * 0.12, "회전 속도가 프레임마다 튀지 않는다 (최대 %.3f)" % jump)
+	# 드리프트를 걸어도 회전이 부드럽게 붙는다
+	k = mk.call()
+	var jd := 0.0
+	prev = 0.0
+	var slips := []
+	for i in 90:
+		Rules.step(k, {"throttle": 1.0, "steer": 1.0, "drift": i < 10}, st, dt)
+		jd = maxf(jd, absf(absf(k.yaw_rate) - prev))
+		prev = absf(k.yaw_rate)
+		slips.append(absf(k.slip))
+	ok(jd < 0.25, "드리프트 시작도 부드럽다 (프레임당 최대 %.3f)" % jd)
+	var mx: float = slips.max()
+	ok(mx > 0.3 and mx < 0.6, "드리프트 미끄러짐 각 %.2f (17°~34°)" % mx)
+	ok(Rules.speed_of(k) > 25.0 * 0.85 or k.vel.length() > 24.0, "1.5초 드리프트해도 속도가 남는다 %.1f" % k.vel.length())
+	# 커팅: Shift를 0.15초만 끊어 치면, 같은 시간 핸들만 꺾은 것보다 많이 돌고 속도는 거의 그대로
+	var cut: Dictionary = mk.call()
+	var turn: Dictionary = mk.call()
+	for i in 60:
+		var on := i < 9
+		Rules.step(cut, {"throttle": 1.0, "steer": 1.0 if on else 0.0, "drift": on}, st, dt)
+		Rules.step(turn, {"throttle": 1.0, "steer": 1.0 if on else 0.0}, st, dt)
+	var cut_ang := absf(atan2(cut.vel.x, cut.vel.y))
+	var turn_ang := absf(atan2(turn.vel.x, turn.vel.y))
+	ok(cut_ang > turn_ang * 1.3, "끊어 친 드리프트가 더 꺾인다 (%.2f > %.2f rad)" % [cut_ang, turn_ang])
+	ok(cut.vel.length() > 28.0 * 0.95, "커팅해도 속도를 거의 안 잃는다 (%.1f)" % cut.vel.length())
+	print("  조작감: 핸들 첫 %.3f→%.2f, 드리프트 각 %.2f, 커팅 %.2f vs 핸들 %.2f rad, 속도 %.1f" % [first, prev, mx, cut_ang, turn_ang, cut.vel.length()])
+	ok(not cut.drift and absf(cut.slip) < 0.05, "끊어 친 드리프트는 곧 바로 선다 (미끄러짐 %.2f)" % cut.slip)

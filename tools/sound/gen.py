@@ -120,20 +120,50 @@ def engine():
     return out
 
 
-def skid():
-    rnd = random.Random(5)
-    n = int(0.8 * SR)
-    out, y = [], 0.0
+def _squeal(n, seed, f0=1150.0, sweep=None):
+    """타이어 끼익: 1kHz 언저리 떨리는 음 몇 개 + 좁은 대역 잡음. sweep(t)→배율"""
+    rnd = random.Random(seed)
+    out = []
+    ph1 = ph2 = ph3 = 0.0
+    walk = 0.0
+    lo1 = lo2 = 0.0
+    flutter_ph = 0.0
     for i in range(n):
-        y += (rnd.uniform(-1, 1) - y) * 0.35
         t = i / SR
-        out.append(y * (0.8 + 0.2 * math.sin(2 * math.pi * 23 * t)) + 0.15 * osc('tri', t * 620))
-    # 앞뒤를 겹쳐 이음매 없애기
-    m = int(0.05 * SR)
+        walk += (rnd.uniform(-1, 1) * 0.004 - walk * 0.002)
+        jit = 1.0 + walk + 0.012 * math.sin(2 * math.pi * 7.3 * t) + rnd.uniform(-0.004, 0.004)
+        f = f0 * jit * (sweep(t) if sweep else 1.0)
+        ph1 += f / SR
+        ph2 += f * 1.49 / SR
+        ph3 += f * 2.13 / SR
+        flutter_ph += (31.0 + 9.0 * math.sin(2 * math.pi * 0.9 * t)) / SR
+        flutter = 0.75 + 0.25 * math.sin(2 * math.pi * flutter_ph)
+        tonal = math.sin(2 * math.pi * ph1) + 0.45 * math.sin(2 * math.pi * ph2) + 0.25 * osc('tri', ph3)
+        x = rnd.uniform(-1, 1)
+        lo1 += (x - lo1) * 0.55
+        lo2 += (lo1 - lo2) * 0.18
+        band = (lo1 - lo2) * 1.6          # 대역 잡음 (고음 쪽 쉬익)
+        out.append((tonal * 0.55 * flutter + band * 0.35))
+    return out
+
+
+def skid():
+    """드리프트 중 계속 나는 끼익 (이어 붙여 반복)"""
+    n = int(1.4 * SR)
+    out = _squeal(n, 5)
+    m = int(0.08 * SR)
     for i in range(m):
         k = i / m
         out[i] = out[i] * k + out[n - m + i] * (1 - k)
     return out[: n - m]
+
+
+def screech():
+    """드리프트를 거는 순간 끼이익 한 번 (높게 시작해 내려옴)"""
+    dur = 0.55
+    n = int(dur * SR)
+    raw = _squeal(n, 11, 1250.0, lambda t: 1.25 - 0.25 * min(1.0, t / 0.18))
+    return [x * env(i / SR, dur, 0.008, 0.25) * (1.0 if i / SR < 0.15 else 0.75) for i, x in enumerate(raw)]
 
 
 def boost():
@@ -266,7 +296,7 @@ def race_music():
 
 
 def main():
-    sfx = {'engine': engine, 'skid': skid, 'boost': boost, 'mini': mini, 'gain': gain, 'beep': beep, 'go': go,
+    sfx = {'engine': engine, 'skid': skid, 'screech': screech, 'boost': boost, 'mini': mini, 'gain': gain, 'beep': beep, 'go': go,
            'coin': coin, 'bump': bump, 'lap': lap, 'finish': finish, 'click': click, 'tick': tick, 'buy': buy, 'nope': nope}
     for name, fn in sfx.items():
         write(os.path.join(ROOT, 'sfx', name + '.wav'), fn())

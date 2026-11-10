@@ -1,7 +1,7 @@
 extends Node
 ## 효과음·엔진·끌리는 소리·배경음 (자동 로드 Sound). 소리 파일은 tools/sound/gen.py 가 만든다.
 
-const NAMES := ["boost", "mini", "gain", "beep", "go", "coin", "bump", "lap", "finish", "click", "tick", "buy", "nope"]
+const NAMES := ["screech", "boost", "mini", "gain", "beep", "go", "coin", "bump", "lap", "finish", "click", "tick", "buy", "nope"]
 
 var sfx := {}
 var pool: Array[AudioStreamPlayer] = []
@@ -64,11 +64,21 @@ func engine(who: int, ratio: float, boost: bool, players: int) -> void:
 	p.pitch_scale = lerpf(p.pitch_scale, 0.6 + ratio * 1.25 + (0.25 if boost else 0.0), 0.2)
 	p.volume_db = (-15.0 if players == 1 else -19.0) + ratio * 3.0
 
-func skid(who: int, on: bool) -> void:
+## amount 0..1: 미끄러지는 정도(미끄러짐 각 × 속도). 크면 소리도 크고 높다. 꺼질 때는 짧게 줄여 끊는다
+var _skid_lv := {1: 0.0, 2: 0.0}
+
+func skid(who: int, on: bool, amount := 1.0, players := 1) -> void:
 	var p: AudioStreamPlayer = skids[who]
-	if on and not p.playing and not muted:
-		p.play()
-	elif not on and p.playing:
+	var want := clampf(amount, 0.0, 1.0) if on else 0.0
+	var lv: float = _skid_lv[who]
+	lv = move_toward(lv, want, (6.0 if want > lv else 9.0) / 60.0)
+	_skid_lv[who] = lv
+	if lv > 0.02 and not muted:
+		if not p.playing:
+			p.play()
+		p.volume_db = linear_to_db(lv) - (7.0 if players == 1 else 11.0)
+		p.pitch_scale = 0.88 + lv * 0.22
+	elif p.playing:
 		p.stop()
 
 func pause_loops(paused: bool) -> void:
