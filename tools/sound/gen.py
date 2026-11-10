@@ -1,0 +1,279 @@
+"""효과음·배경음을 코드로 합성해 assets/sfx, assets/music 에 wav로 쓴다.
+python3 tools/sound/gen.py   (외부 음원 없음, 표준 라이브러리만. 같은 결과가 나오게 난수 씨앗 고정)
+"""
+import array, math, os, random, wave
+
+SR = 22050
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'assets')
+
+
+def write(path, data, sr=SR, norm=0.9):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    peak = max(1e-6, max(abs(x) for x in data))
+    g = norm / peak
+    a = array.array('h', (int(max(-1.0, min(1.0, x * g)) * 32000) for x in data))
+    with wave.open(path, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(a.tobytes())
+
+
+def osc(kind, ph):
+    p = ph % 1.0
+    if kind == 'sin':
+        return math.sin(2 * math.pi * p)
+    if kind == 'tri':
+        return 4 * abs(p - 0.5) - 1
+    if kind == 'sq':
+        return 1.0 if p < 0.5 else -1.0
+    if kind == 'pul':
+        return 1.0 if p < 0.25 else -1.0
+    if kind == 'saw':
+        return 2 * p - 1
+    return 0.0
+
+
+def env(t, dur, a=0.005, r=0.05):
+    if t < a:
+        return t / a
+    if t > dur - r:
+        return max(0.0, (dur - t) / r)
+    return 1.0
+
+
+def tone(dur, f0, f1=None, kind='sq', vol=0.5, a=0.005, r=0.05, decay=0.0):
+    n = int(dur * SR)
+    f1 = f1 or f0
+    out, ph = [], 0.0
+    for i in range(n):
+        t = i / SR
+        f = f0 * (f1 / f0) ** (t / dur)
+        ph += f / SR
+        v = osc(kind, ph) * vol * env(t, dur, a, r)
+        if decay:
+            v *= math.exp(-decay * t)
+        out.append(v)
+    return out
+
+
+def noise(dur, vol=0.5, lp=0.5, seed=1, a=0.005, r=0.05, decay=0.0):
+    rnd = random.Random(seed)
+    out, y = [], 0.0
+    n = int(dur * SR)
+    for i in range(n):
+        t = i / SR
+        y += (rnd.uniform(-1, 1) - y) * lp
+        v = y * vol * env(t, dur, a, r)
+        if decay:
+            v *= math.exp(-decay * t)
+        out.append(v)
+    return out
+
+
+def mix(*parts):
+    n = max(len(p) for p in parts)
+    out = [0.0] * n
+    for p in parts:
+        for i, x in enumerate(p):
+            out[i] += x
+    return out
+
+
+def seq(*parts):
+    out = []
+    for p in parts:
+        out += p
+    return out
+
+
+def silence(d):
+    return [0.0] * int(d * SR)
+
+
+def note_hz(n):
+    """'C4' 같은 이름 → 주파수"""
+    names = {'C': -9, 'D': -7, 'E': -5, 'F': -4, 'G': -2, 'A': 0, 'B': 2}
+    k = names[n[0]]
+    i = 1
+    if n[i] == '#':
+        k += 1; i += 1
+    elif n[i] == 'b':
+        k -= 1; i += 1
+    octave = int(n[i:])
+    return 440.0 * 2 ** ((k + (octave - 4) * 12) / 12)
+
+
+# ───────────── 효과음 ─────────────
+
+def engine():
+    # 끊김 없이 이어지도록 정수 주기. 기본 90Hz 톱니 + 반 주파수 네모 + 약한 떨림
+    f = 90.0
+    cycles = 45
+    n = int(round(cycles / f * SR))
+    out = []
+    for i in range(n):
+        ph = i * cycles / n
+        v = 0.5 * osc('saw', ph) + 0.35 * osc('sq', ph * 0.5) + 0.2 * osc('sin', ph * 2)
+        v *= 0.8 + 0.2 * math.sin(2 * math.pi * i * 5 / n)
+        out.append(v)
+    return out
+
+
+def skid():
+    rnd = random.Random(5)
+    n = int(0.8 * SR)
+    out, y = [], 0.0
+    for i in range(n):
+        y += (rnd.uniform(-1, 1) - y) * 0.35
+        t = i / SR
+        out.append(y * (0.8 + 0.2 * math.sin(2 * math.pi * 23 * t)) + 0.15 * osc('tri', t * 620))
+    # 앞뒤를 겹쳐 이음매 없애기
+    m = int(0.05 * SR)
+    for i in range(m):
+        k = i / m
+        out[i] = out[i] * k + out[n - m + i] * (1 - k)
+    return out[: n - m]
+
+
+def boost():
+    return mix(noise(0.9, 0.7, 0.25, 3, 0.02, 0.4), tone(0.9, 180, 640, 'saw', 0.25, 0.01, 0.4))
+
+
+def mini():
+    return mix(tone(0.28, 500, 1400, 'sq', 0.25, 0.005, 0.12), noise(0.28, 0.3, 0.5, 4, 0.005, 0.15))
+
+
+def gain():
+    return seq(tone(0.09, note_hz('E5'), kind='pul', vol=0.35), tone(0.18, note_hz('B5'), kind='pul', vol=0.35, r=0.12))
+
+
+def beep():
+    return tone(0.22, note_hz('A4'), kind='sq', vol=0.4, r=0.08)
+
+
+def go():
+    return tone(0.6, note_hz('A5'), kind='sq', vol=0.4, r=0.3)
+
+
+def coin():
+    return seq(tone(0.06, note_hz('B5'), kind='sq', vol=0.3), tone(0.16, note_hz('E6'), kind='sq', vol=0.3, r=0.12))
+
+
+def bump():
+    return mix(noise(0.25, 0.9, 0.08, 9, 0.002, 0.2, decay=10), tone(0.2, 120, 50, 'sin', 0.6, 0.002, 0.15))
+
+
+def lap():
+    return seq(*[tone(0.1, note_hz(n), kind='pul', vol=0.3, r=0.06) for n in ['C5', 'E5', 'G5']], tone(0.25, note_hz('C6'), kind='pul', vol=0.3, r=0.2))
+
+
+def finish():
+    notes = [('G4', 0.12), ('C5', 0.12), ('E5', 0.12), ('G5', 0.3), ('E5', 0.12), ('G5', 0.6)]
+    mel = seq(*[tone(d, note_hz(n), kind='pul', vol=0.3, r=0.05) for n, d in notes])
+    bass = seq(*[tone(d, note_hz(n) / 4, kind='tri', vol=0.4, r=0.05) for n, d in notes])
+    return mix(mel, bass)
+
+
+def click():
+    return tone(0.05, 900, 600, 'sq', 0.25, 0.001, 0.03)
+
+
+def tick():
+    return tone(0.03, 1500, kind='sin', vol=0.2, a=0.001, r=0.02)
+
+
+def buy():
+    return seq(coin(), tone(0.08, note_hz('G6'), kind='sq', vol=0.25), tone(0.3, note_hz('C7'), kind='sq', vol=0.25, r=0.25))
+
+
+def nope():
+    return seq(tone(0.1, 220, kind='sq', vol=0.3), tone(0.2, 165, kind='sq', vol=0.3, r=0.1))
+
+
+# ───────────── 배경음 (새로 지은 곡) ─────────────
+
+def render(bpm, bars, chords, melody, drums=True, lead='pul', bass_kind='tri', swing=0.0):
+    """chords: 마디마다 화음 이름 목록(근음 기준), melody: (음 또는 None, 박 길이) 목록"""
+    beat = 60.0 / bpm
+    total = int(bars * 4 * beat * SR)
+    out = [0.0] * total
+
+    def add(start, part):
+        s = int(start * SR)
+        for i, x in enumerate(part):
+            if s + i < total:
+                out[s + i] += x
+
+    # 베이스와 화음 (8분 쪼개기)
+    for b in range(bars):
+        root, kind = chords[b % len(chords)]
+        r = note_hz(root)
+        third = r * (2 ** ((3 if kind == 'm' else 4) / 12))
+        fifth = r * (2 ** (7 / 12))
+        for e in range(8):
+            t = (b * 4 + e * 0.5) * beat
+            bf = r / 2 if e % 2 == 0 else fifth / 2
+            add(t, tone(beat * 0.45, bf, kind=bass_kind, vol=0.32, r=0.03))
+            if e % 2 == 1:
+                for f in (r * 2, third * 2, fifth * 2):
+                    add(t, tone(beat * 0.3, f, kind='sq', vol=0.05, r=0.05))
+    # 멜로디
+    t = 0.0
+    while t < bars * 4:
+        for n, d in melody:
+            if t >= bars * 4:
+                break
+            if n:
+                add(t * beat, tone(d * beat * 0.92, note_hz(n), kind=lead, vol=0.18, a=0.01, r=0.04))
+            t += d
+    # 북
+    if drums:
+        for q in range(bars * 8):
+            t = q * 0.5 * beat
+            if q % 4 == 0:
+                add(t, tone(0.12, 140, 45, 'sin', 0.5, 0.001, 0.08))
+            if q % 4 == 2:
+                add(t, noise(0.12, 0.35, 0.7, q, 0.001, 0.08, decay=20))
+            add(t, noise(0.03, 0.08, 0.9, q + 100, 0.001, 0.02))
+    return out
+
+
+def title_music():
+    chords = [('F4', ''), ('C4', ''), ('D4', 'm'), ('A#3', ''), ('F4', ''), ('C4', ''), ('A#3', ''), ('C4', '')]
+    mel = [('A5', 1), ('G5', 0.5), ('F5', 0.5), ('G5', 1), ('C5', 1),
+           ('D5', 0.5), ('E5', 0.5), ('F5', 1), ('A5', 1), ('G5', 1),
+           ('F5', 1), ('D5', 1), ('F5', 0.5), ('G5', 0.5), ('A5', 1),
+           ('A#5', 1), ('A5', 0.5), ('G5', 0.5), ('F5', 1), (None, 1),
+           ('A5', 1), ('C6', 1), ('A#5', 0.5), ('A5', 0.5), ('G5', 1),
+           ('F5', 1), ('G5', 1), ('A5', 1), ('F5', 1),
+           ('D5', 1), ('F5', 1), ('G5', 1), ('A#5', 1),
+           ('A5', 1.5), ('G5', 0.5), ('F5', 2)]
+    return render(112, 8, chords, mel, drums=True, lead='tri')
+
+
+def race_music():
+    chords = [('A3', 'm'), ('F3', ''), ('C4', ''), ('G3', ''), ('A3', 'm'), ('F3', ''), ('G3', ''), ('E3', '')]
+    mel = [('E5', 0.5), ('A5', 0.5), ('B5', 0.5), ('C6', 0.5), ('B5', 0.5), ('A5', 0.5), ('E5', 1),
+           ('F5', 0.5), ('A5', 0.5), ('C6', 1), ('A5', 0.5), ('G5', 0.5), ('F5', 1),
+           ('E5', 0.5), ('G5', 0.5), ('C6', 0.5), ('E6', 0.5), ('D6', 1), ('C6', 1),
+           ('B5', 0.5), ('D6', 0.5), ('G5', 1), ('B5', 1), (None, 1),
+           ('A5', 0.5), ('C6', 0.5), ('E6', 1), ('D6', 0.5), ('C6', 0.5), ('B5', 1),
+           ('A5', 0.5), ('F5', 0.5), ('A5', 1), ('C6', 1), ('A5', 1),
+           ('B5', 0.5), ('D6', 0.5), ('B5', 0.5), ('G5', 0.5), ('D6', 1), ('B5', 1),
+           ('G#5', 1), ('B5', 1), ('E6', 1.5), (None, 0.5)]
+    return render(150, 8, chords, mel, drums=True, lead='pul')
+
+
+def main():
+    sfx = {'engine': engine, 'skid': skid, 'boost': boost, 'mini': mini, 'gain': gain, 'beep': beep, 'go': go,
+           'coin': coin, 'bump': bump, 'lap': lap, 'finish': finish, 'click': click, 'tick': tick, 'buy': buy, 'nope': nope}
+    for name, fn in sfx.items():
+        write(os.path.join(ROOT, 'sfx', name + '.wav'), fn())
+    write(os.path.join(ROOT, 'music', 'title.wav'), title_music(), norm=0.7)
+    write(os.path.join(ROOT, 'music', 'race.wav'), race_music(), norm=0.7)
+    print('소리 %d개 + 곡 2개' % len(sfx))
+
+
+if __name__ == '__main__':
+    main()

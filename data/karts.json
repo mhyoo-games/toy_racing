@@ -1,0 +1,41 @@
+{
+  "_": "카트 목록. 능력치는 1~10 (rules.gd의 kart_stats가 실제 값으로 바꾼다). price 0이면 처음부터 있음.",
+  "karts": [
+    {
+      "id": "acorn", "name": "도토리", "price": 0,
+      "desc": "처음 받는 카트. 무난하고 다루기 쉽다.",
+      "stats": {"speed": 4, "accel": 5, "handling": 6, "drift": 5, "boost": 4, "weight": 5},
+      "color": "#c8873f", "trim": "#6b4226", "shape": {"len": 2.0, "wid": 1.25, "nose": 0.5, "wing": false, "pods": false}
+    },
+    {
+      "id": "pinecone", "name": "솔방울", "price": 300,
+      "desc": "출발과 재가속이 빠르다. 최고 속도는 낮은 편.",
+      "stats": {"speed": 4, "accel": 9, "handling": 6, "drift": 5, "boost": 5, "weight": 4},
+      "color": "#7a5a3a", "trim": "#e8c06a", "shape": {"len": 1.9, "wid": 1.3, "nose": 0.4, "wing": false, "pods": true}
+    },
+    {
+      "id": "squirrel", "name": "다람쥐", "price": 500,
+      "desc": "드리프트 게이지가 잘 찬다. 부스터를 자주 쓰는 카트.",
+      "stats": {"speed": 5, "accel": 6, "handling": 7, "drift": 9, "boost": 5, "weight": 3},
+      "color": "#e0763a", "trim": "#fff1d6", "shape": {"len": 2.0, "wid": 1.2, "nose": 0.6, "wing": true, "pods": false}
+    },
+    {
+      "id": "pinwheel", "name": "바람개비", "price": 800,
+      "desc": "최고 속도가 빠르지만 핸들이 무겁다.",
+      "stats": {"speed": 9, "accel": 5, "handling": 4, "drift": 5, "boost": 6, "weight": 5},
+      "color": "#3a8fd8", "trim": "#f4f4f4", "shape": {"len": 2.3, "wid": 1.2, "nose": 0.8, "wing": true, "pods": false}
+    },
+    {
+      "id": "mushroom", "name": "버섯", "price": 1200,
+      "desc": "무거워서 부딪혀도 잘 안 밀린다. 부스터가 길다.",
+      "stats": {"speed": 7, "accel": 5, "handling": 5, "drift": 5, "boost": 9, "weight": 9},
+      "color": "#d8423a", "trim": "#fff6ee", "shape": {"len": 2.2, "wid": 1.45, "nose": 0.4, "wing": false, "pods": true}
+    },
+    {
+      "id": "firefly", "name": "반딧불", "price": 2000,
+      "desc": "모든 능력이 고르게 좋은 최고급 카트.",
+      "stats": {"speed": 8, "accel": 8, "handling": 8, "drift": 8, "boost": 8, "weight": 6},
+      "color": "#3fbf6a", "trim": "#f6e85a", "shape": {"len": 2.2, "wid": 1.25, "nose": 0.7, "wing": true, "pods": true}
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+; Godot 4 프로젝트 설정 (손으로 고쳐도 됨)
+config_version=5
+
+[application]
+
+config/name="토이 레이싱"
+config/description="숲속 장난감 카트 레이싱 — 드리프트·부스터·순간부스터"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+config/icon="res://assets/icon.png"
+boot_splash/bg_color=Color(0.12, 0.2, 0.14, 1)
+boot_splash/show_image=false
+
+[autoload]
+
+Game="*res://scripts/game.gd"
+Sound="*res://scripts/sound.gd"
+Dev="*res://scripts/dev.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=false
+
+[physics]
+
+common/physics_ticks_per_second=60
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+anti_aliasing/quality/msaa_3d=1
+environment/defaults/default_clear_color=Color(0.55, 0.78, 0.92, 1)
+
+[gui]
+
+theme/custom_font="res://assets/fonts/Galmuri11.ttf"
+theme/default_font_size=20

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT: 4.6.3-stable
+
+jobs:
+  build:
+    name: 소리·그림 재생성 확인 + 주행 규칙 테스트 + 웹 빌드
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pillow==12.3.0
+      - name: 코드로 만든 소리·아이콘이 저장소와 같은지
+        run: |
+          python3 tools/sound/gen.py
+          python3 tools/art/icon.py
+          git status --porcelain
+          git diff --stat --exit-code -- assets/sfx assets/music
+      - name: Godot 받기
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT }}-web
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot && cd ~/godot
+          curl -fsSL -o g.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT}/Godot_v${GODOT}_linux.x86_64.zip"
+          unzip -q g.zip && rm g.zip
+          curl -fsSL -o t.tpz "https://github.com/godotengine/godot-builds/releases/download/${GODOT}/Godot_v${GODOT}_export_templates.tpz"
+          unzip -q t.tpz 'templates/web_nothreads_*' 'templates/version.txt' && rm t.tpz
+      - name: 설치
+        run: |
+          sudo ln -sf ~/godot/Godot_v${GODOT}_linux.x86_64 /usr/local/bin/godot
+          V=$(cat ~/godot/templates/version.txt)
+          mkdir -p ~/.local/share/godot/export_templates/$V
+          cp ~/godot/templates/* ~/.local/share/godot/export_templates/$V/
+          godot --headless --version
+      - name: 가져오기(import)
+        run: timeout 300 godot --headless --import || true
+      - name: 주행 규칙 테스트 (드리프트·부스터·순간부스터·커팅·랩·상점·저장, 컴퓨터가 모든 트랙 3바퀴)
+        run: godot --headless -s tests/run_tests.gd
+      - name: 게임이 오류 없이 켜지는지 (5초)
+        run: |
+          timeout 60 godot --headless --audio-driver Dummy --quit-after 300 2>&1 | tee run.log
+          ! grep -E "SCRIPT ERROR|Parse Error" run.log
+      - name: 경주가 오류 없이 돌아가는지 (컴퓨터가 대신 몰기)
+        run: |
+          timeout 120 godot --headless --audio-driver Dummy -- --dev=time --out=/tmp/shots 2>&1 | tee race.log || true
+          ! grep -E "SCRIPT ERROR|Parse Error" race.log
+      - name: 웹으로 내보내기
+        run: |
+          mkdir -p build/web
+          godot --headless --export-release "Web" build/web/index.html
+          ls -la build/web
+          test -s build/web/index.pck
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: build/web
+
+  deploy:
+    name: GitHub Pages에 올리기
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
