@@ -12,8 +12,9 @@ const START_WINDOW := 0.4        ## 출발 직전 이 시간 안에 가속을 �
 const DRIFT_MIN_SPEED := 9.0
 const STEER_IN := 5.5            ## 핸들이 꺾이는 빠르기 (1/초, 끝까지 약 0.18초)
 const STEER_OUT := 9.0           ## 핸들을 놓을 때 돌아오는 빠르기
+const STEER_DRIFT := 11.0        ## 드리프트 중 핸들 빠르기
 const DRIFT_GRIP := 5.0          ## 드리프트 중 가는 방향이 코를 따라가는 빠르기 (낮을수록 많이 미끄러짐)
-const RECOVER_TIME := 0.42       ## 드리프트가 끝난 뒤 접지가 다 돌아오는 시간 (그동안 속도를 거의 안 잃음 = 끊어 타기·커팅)
+const RECOVER_TIME := 0.42       ## 드리프트가 끝난 뒤 접지가 다 돌아오는 시간 (그동안 속도를 거의 안 잃음 = 톡톡이)
 
 # ────────────────────────── 카트 능력치 ──────────────────────────
 
@@ -72,7 +73,7 @@ static func top_speed(k: Dictionary, st: Dictionary) -> float:
 ## 모델: 속도는 크기(sp)와 방향(va)으로 나눈다. 핸들은 코(yaw)를 돌리고, 가는 방향(va)은 접지력만큼 코를 따라간다.
 ##   보통 때는 접지력이 커서 거의 바로 따라가고, 드리프트 중에는 작아서 옆으로 미끄러진다(미끄러짐 각 ≈ 회전 속도 / 접지력).
 ##   방향만 돌 뿐 속도 크기는 미끄러지는 만큼만 조금씩 준다 → 드리프트해도 속도가 살아 있다.
-##   드리프트가 끝나면 접지력이 RECOVER_TIME에 걸쳐 돌아온다 → Shift를 짧게 끊어 치면 속도를 잃지 않고 방향만 꺾인다(커팅).
+##   드리프트가 끝나면 접지력이 RECOVER_TIME에 걸쳐 돌아온다 → Shift를 짧게 끊어 치면 속도를 잃지 않고 방향만 꺾인다(톡톡이). 직선에서 좌우로 톡톡 치면 앞으로 가며 게이지가 찬다(커팅).
 static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> void:
 	var throttle: float = clampf(float(inp.get("throttle", 0.0)), -1.0, 1.0)
 	var raw: float = clampf(float(inp.get("steer", 0.0)), -1.0, 1.0)
@@ -81,6 +82,8 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 	var rate := STEER_OUT
 	if raw != 0.0 and (cur == 0.0 or signf(raw) == signf(cur)) and absf(raw) > absf(cur):
 		rate = STEER_IN
+	if k.drift:
+		rate = STEER_DRIFT   # 드리프트 중에는 카운터를 빨리 넣을 수 있게
 	k.steer_s = move_toward(cur, raw, rate * dt)
 	var steer: float = k.steer_s
 
@@ -113,21 +116,29 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 		var dir := float(k.drift_dir)
 		var push := steer * dir            # +면 미는 쪽, -면 반대(카운터)
 		var released: bool = not inp.get("drift", false)
-		var amt := clampf(0.62 + 0.42 * push, 0.25, 1.04)
-		target_w = -dir * st.turn * 1.08 * amt
 		resp = 6.5
 		grip = DRIFT_GRIP
 		slide_drag = 2.4
-		if released and push < -0.2:
-			# 카운터: 코를 가는 방향 쪽으로 되돌리며 빨리 편다
+		if not released:
+			# 드리프트 키를 누르고 있는 동안에도 방향키가 다 먹는다 (끌기):
+			# 미는 쪽은 더 돌고, 반대쪽은 코를 되돌린다. 계속 반대로 누르면 반대쪽 드리프트로 이어진다.
+			var amt := 0.62 + 0.42 * push if push >= 0.0 else 0.62 + 1.35 * push
+			target_w = -dir * st.turn * 1.08 * amt
+			if push < 0.0:
+				resp = 9.0
+		elif push < -0.2:
+			# 키를 떼고 카운터: 코를 가는 방향 쪽으로 되돌리며 빨리 편다
 			target_w = dir * st.turn * 0.35
 			grip = 9.0
 			ending = true
-		elif released and push < 0.3:
+		elif push < 0.3:
 			# 손을 다 떼면 천천히 펴진다
 			target_w = -dir * st.turn * 0.08
 			grip = 7.0
 			ending = true
+		else:
+			var amt2 := 0.62 + 0.42 * push
+			target_w = -dir * st.turn * 1.08 * amt2
 	else:
 		var low := clampf(absf(sp) / 7.0, 0.35, 1.0)   # 멈춰 있어도 조금은 돈다
 		var high := 1.0 - 0.22 * clampf(sp / st.max_speed, 0.0, 1.2)
@@ -155,7 +166,8 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 	elif throttle > 0.0:
 		if sp < top:
 			var curve := 1.0 - 0.55 * clampf(sp / top, 0.0, 1.0)
-			sp = minf(top, sp + st.accel * throttle * curve * along * (0.35 if k.drift else 1.0) * dt)
+			var drift_acc := lerpf(1.0, 0.35, clampf(absf(slip) / 0.4, 0.0, 1.0)) if k.drift else 1.0   # 조금만 미끄러지면 가속이 거의 산다 (톡톡이·커팅)
+			sp = minf(top, sp + st.accel * throttle * curve * along * drift_acc * dt)
 	elif throttle < 0.0:
 		if sp > 0.5:
 			sp = maxf(0.0, sp - 38.0 * dt)
@@ -172,14 +184,22 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 
 	# ── 드리프트 게이지·끝
 	if k.drift:
-		k.gauge += st.drift_gain * (0.3 + 0.7 * clampf(absf(slip) / 0.4, 0.0, 1.0)) * clampf(sp / 20.0, 0.0, 1.0) * dt
+		# 게이지: 미끄러지는 만큼 (작게 미끄러져도 조금씩 찬다 → 직선에서 톡톡 쳐서 모으는 커팅)
+		if absf(slip) > 0.03:
+			k.gauge += st.drift_gain * (0.3 + 0.7 * clampf(absf(slip) / 0.4, 0.0, 1.0)) * clampf(sp / 20.0, 0.0, 1.0) * dt
 		var dir2 := float(k.drift_dir)
-		if (ending and absf(slip) < 0.1) or sp < 6.0 or (k.drift_time > 0.12 and slip * dir2 < -0.05):
+		var held: bool = inp.get("drift", false)
+		if held and k.drift_time > 0.1 and slip * dir2 < -0.04 and steer * dir2 < -0.3:
+			# 누른 채 반대로 꺾어 코가 넘어가면 반대쪽 드리프트로 이어간다
+			k.drift_dir = -int(dir2)
+			k.drift_time = 0.0
+			k.events.append("drift_flip")
+		elif (ending and absf(slip) < 0.1) or sp < 6.0 or (not held and k.drift_time > 0.12 and slip * dir2 < -0.05):
 			k.drift = false
 	if was_drift and not k.drift:
 		k.events.append("drift_end")
 		k.recover = 0.0
-		if k.drift_time > 0.25:
+		if k.drift_time > 0.18:
 			k.window_t = MINI_WINDOW
 
 	# ── 순간부스터: 드리프트가 끝난 직후 가속 키를 다시 누른다

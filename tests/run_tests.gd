@@ -20,6 +20,7 @@ func _init() -> void:
 	_driving()
 	_drift_and_boost()
 	_smooth_feel()
+	_drift_tricks()
 	_track_geometry()
 	_race_rules()
 	_shop_and_save()
@@ -298,3 +299,54 @@ func _smooth_feel() -> void:
 	ok(cut.vel.length() > 28.0 * 0.95, "커팅해도 속도를 거의 안 잃는다 (%.1f)" % cut.vel.length())
 	print("  조작감: 핸들 첫 %.3f→%.2f, 드리프트 각 %.2f, 커팅 %.2f vs 핸들 %.2f rad, 속도 %.1f" % [first, prev, mx, cut_ang, turn_ang, cut.vel.length()])
 	ok(not cut.drift and absf(cut.slip) < 0.05, "끊어 친 드리프트는 곧 바로 선다 (미끄러짐 %.2f)" % cut.slip)
+
+## 드리프트 기술: 누른 채 방향키(끌기·반대쪽으로 이어가기), 직선에서 톡톡 쳐서 게이지 모으기(톡톡이·커팅)
+func _drift_tricks() -> void:
+	var st := Rules.kart_stats(kart("acorn"))
+	var dt := 1.0 / 60.0
+	# 끌기: 누른 채 미는 쪽으로 길게 → 게이지가 많이 찬다
+	var k := Rules.new_kart(Vector2.ZERO, 0.0)
+	k.vel = Vector2(0, 28)
+	for i in 90:
+		Rules.step(k, {"throttle": 1.0, "steer": 1.0, "drift": true}, st, dt)
+	ok(k.drift and k.gauge > 0.5, "끌기: 1.5초 끌면 게이지 반 넘게 (%.2f)" % k.gauge)
+	# 누른 채 반대로 꺾으면 코가 돌아오고(드리프트는 이어짐), 더 누르면 반대쪽 드리프트로
+	var slip_before := absf(k.slip)
+	for i in 15:
+		Rules.step(k, {"throttle": 1.0, "steer": -1.0, "drift": true}, st, dt)
+	ok(k.drift and absf(k.slip) < slip_before - 0.15, "누른 채 반대 방향키: 코가 돌아온다 (%.2f → %.2f)" % [slip_before, absf(k.slip)])
+	var flipped := false
+	for i in 50:
+		Rules.step(k, {"throttle": 1.0, "steer": -1.0, "drift": true}, st, dt)
+		if "drift_flip" in k.events:
+			flipped = true
+		k.events.clear()
+	ok(flipped and k.drift and k.drift_dir == -1 and k.slip < -0.2, "계속 누르면 반대쪽 드리프트로 이어진다 (S자)")
+	# 톡톡이·커팅: 직선에서 Shift+방향키를 짧게 좌우로 톡톡 → 앞으로 가면서 게이지를 모은다
+	var c := Rules.new_kart(Vector2.ZERO, 0.0)
+	c.vel = Vector2(0, st.max_speed)
+	var plain := Rules.new_kart(Vector2.ZERO, 0.0)
+	plain.vel = Vector2(0, st.max_speed)
+	var side := 1.0
+	var t := 0.0
+	var worst := 0.0
+	for i in 240:
+		var ph := fmod(t, 0.45)
+		if ph < dt:
+			# 사람처럼: 가는 방향이 틀어진 반대쪽으로 친다 (거의 똑바르면 번갈아)
+			var head := wrapf(atan2(c.vel.x, c.vel.y), -PI, PI)
+			side = -side if absf(head) < 0.04 else (1.0 if head > 0.0 else -1.0)
+		var inp := {"throttle": 1.0, "steer": 0.0, "drift": false}
+		if ph < 0.12:
+			inp = {"throttle": 1.0, "steer": side, "drift": true}
+		elif ph < 0.3:
+			inp = {"throttle": 1.0, "steer": -side, "drift": true}
+		Rules.step(c, inp, st, dt)
+		Rules.step(plain, {"throttle": 1.0}, st, dt)
+		worst = maxf(worst, absf(wrapf(atan2(c.vel.x, c.vel.y), -PI, PI)))
+		t += dt
+	var gained: float = c.gauge + c.boosts
+	print("  톡톡이·커팅 4초: 게이지 %.2f, 속도 %.1f / %.1f, 가장 많이 틀어진 방향 %.2f rad, 앞으로 %.0f / %.0f" % [gained, c.vel.length(), plain.vel.length(), worst, c.pos.y, plain.pos.y])
+	ok(gained > 0.6, "커팅: 직선에서 톡톡 쳐서 게이지를 모은다 (%.2f)" % gained)
+	ok(worst < 0.35, "커팅해도 거의 앞으로 간다 (%.2f rad)" % worst)
+	ok(c.pos.y > plain.pos.y * 0.93, "커팅해도 거리를 크게 안 잃는다 (%.0f / %.0f)" % [c.pos.y, plain.pos.y])

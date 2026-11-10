@@ -12,10 +12,12 @@ func _ready() -> void:
 	bg.color = Color(0.05, 0.08, 0.06, 0.7)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(center)
 	box = VBoxContainer.new()
-	box.set_anchors_preset(Control.PRESET_CENTER)
 	box.add_theme_constant_override("separation", 14)
-	add_child(box)
+	center.add_child(box)
 	var t := Label.new()
 	t.text = "잠깐 멈춤"
 	t.add_theme_font_override("font", Game.font_bold)
@@ -26,14 +28,12 @@ func _ready() -> void:
 	for pair in items:
 		var b := UI.button(pair[0], pair[1], 320)
 		box.add_child(b)
-	box.position = -box.get_combined_minimum_size() * 0.5
 
 func open() -> void:
 	visible = true
 	if not race.online:   # 온라인은 친구 화면이 계속 달리므로 멈추지 않는다
 		get_tree().paused = true
 		Sound.pause_loops(true)
-	box.position = -box.get_combined_minimum_size() * 0.5
 	(box.get_child(1) as Button).grab_focus()
 
 func _unhandled_input(e: InputEvent) -> void:

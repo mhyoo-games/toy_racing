@@ -265,37 +265,43 @@ func _results() -> void:
 # ───────── 조작 방법
 
 func _help() -> void:
-	var v := _column(60, 36)
-	v.add_child(UI.label("조작 방법", 44, Color(1.0, 0.93, 0.6), true))
+	var v := _column(60, 20)
+	v.add_child(UI.label("조작 방법", 40, Color(1.0, 0.93, 0.6), true))
 	var p := UI.panel()
 	v.add_child(p)
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size = Vector2(1120, 470)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	p.add_child(sc)
 	var lines := [
 		["혼자", "방향키(또는 WASD) 달리기·핸들 / Shift 드리프트 / Ctrl·Space 부스터"],
 		["둘이서 1P", "WASD / 왼쪽 Shift 드리프트 / Space 부스터"],
 		["둘이서 2P", "방향키 / 오른쪽 Shift 또는 / 드리프트 / 오른쪽 Ctrl·Enter 또는 . 부스터"],
 		["게임패드", "스틱·십자키 핸들 / A·RT 가속 / B·LT 브레이크 / X·RB 드리프트 / Y·LB 부스터"],
 		["휴대폰", "◀ ▶ 핸들, 드리프트·부스터·브레이크 버튼 (가속은 저절로)"],
-		["", ""],
-		["드리프트", "굽이에서 방향키 + Shift. 미는 쪽으로 꺾고 있으면 계속 미끄러지고, 손을 떼면 천천히, 반대로 꺾으면 빨리 펴진다. 게이지가 차면 부스터 +1 (두 개까지)"],
+		["드리프트", "굽이에서 방향키 + Shift. 손을 떼면 천천히, 반대로 꺾으면 빨리 펴진다. 미끄러지는 만큼 게이지가 차고, 가득 차면 부스터 +1 (두 개까지)"],
+		["끌기", "Shift를 누른 채로도 방향키가 먹는다. 미는 쪽은 더 돌고, 반대쪽은 코를 되돌린다. 계속 반대로 누르면 반대쪽 드리프트로 이어진다(S자)"],
 		["순간부스터", "드리프트가 끝나는 순간(‘지금 ↑!’) ↑를 다시 누르면 짧게 빨라진다"],
 		["출발 부스터", "출발 신호가 ‘1’에서 꺼지기 직전에 ↑를 누르고 있으면 빨리 튀어 나간다"],
 		["인코스·아웃코스", "굽이 안쪽을 스치면 길이 짧다. 바깥에서 들어가 안쪽을 찍고 다시 바깥으로"],
-		["커팅", "Shift를 짧게 톡 끊어 치면 속도를 거의 안 잃고 방향만 꺾인다. 굽이마다 끊어 치며 안쪽을 파고들자"],
+		["톡톡이", "Shift를 짧게 톡톡 끊어 치면 속도를 거의 안 잃고 방향만 꺾인다. 굽이마다 끊어 치며 안쪽을 파고들자"],
+		["커팅", "직선에서 Shift + 방향키를 좌우로 톡톡, 반대 방향키로 바로 세우며 앞으로 달리면서 게이지를 모은다"],
 		["부스터 지름길", "잔디는 느리지만 부스터를 쓰면 덜 느리다. 굽이 안쪽 잔디를 부스터로 가로지르자"],
 		["멈춤", "Esc 또는 P"],
 	]
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 24)
-	grid.add_theme_constant_override("v_separation", 6)
-	p.add_child(grid)
+	grid.add_theme_constant_override("v_separation", 5)
+	sc.add_child(grid)
 	for l in lines:
-		grid.add_child(UI.label(l[0], 21, Color(1.0, 0.82, 0.3), true))
-		var d := UI.label(l[1], 20, UI.CREAM)
+		grid.add_child(UI.label(l[0], 19, Color(1.0, 0.82, 0.3), true))
+		var d := UI.label(l[1], 18, UI.CREAM)
 		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		d.custom_minimum_size = Vector2(880, 0)
+		d.custom_minimum_size = Vector2(900, 0)
 		grid.add_child(d)
 	var back := UI.button("← 뒤로", func(): show_screen("title"), 200)
+	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	v.add_child(back)
 	back.call_deferred("grab_focus")
 

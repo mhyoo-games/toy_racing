@@ -18,6 +18,10 @@ func _ready() -> void:
 		queue_free()
 		return
 	DirAccess.make_dir_recursive_absolute(out)
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--size="):
+			var wh := a.substr(7).split("x")
+			get_window().size = Vector2i(int(wh[0]), int(wh[1]))
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	Sound.set_muted(true)
 	Engine.max_physics_steps_per_frame = 40
@@ -73,6 +77,11 @@ func _run() -> void:
 			await _race("duo", [5.0, 9.0])
 		"time":
 			await _race("time", [5.0])
+		"pause":
+			await _race("race", [2.0])
+			main().race.pause_menu.open()
+			await wait(0.5)
+			await shot("pause")
 		"results":
 			Game.mode = "race"
 			main().start_race()
