@@ -417,16 +417,25 @@ func _online() -> void:
 				show_screen("online"), 180))
 		col.add_child(row)
 	elif st == "room" and Net.role == "host":
-		say.call("친구에게 이 방 코드를 알려 주세요. 친구가 넣으면 저절로 연결돼요.")
-		var big := UI.label(Net.room, 84, Color(1.0, 0.9, 0.4), true)
-		col.add_child(big)
-		var copybox: CodeBox = add_box.call(true, "")
-		copybox.custom_minimum_size = Vector2(1, 1)
-		copybox.modulate.a = 0.0
-		copybox.set_text(Net.room)
-		row.add_child(UI.button("방 코드 복사", func(): copybox.copy(), 240))
-		col.add_child(row)
-		say.call("친구를 기다리는 중…", Color(0.8, 0.9, 1.0))
+		Net.locked = false
+		if Net.mode == "room":
+			var top := HBoxContainer.new()
+			top.add_theme_constant_override("separation", 18)
+			top.add_child(UI.label("방 코드", 26, UI.CREAM))
+			top.add_child(UI.label(Net.room, 64, Color(1.0, 0.9, 0.4), true))
+			var copybox: CodeBox = CodeBox.new()
+			copybox.readonly = true
+			copybox.custom_minimum_size = Vector2(1, 1)
+			copybox.modulate.a = 0.0
+			top.add_child(copybox)
+			copybox.set_text(Net.room)
+			var cb := UI.button("복사", func(): copybox.copy(), 120, 20)
+			cb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			top.add_child(cb)
+			col.add_child(top)
+			say.call("친구들(최대 %d명)에게 이 코드를 알려 주세요. 넣으면 저절로 들어와요." % (Net.MAX_PLAYERS - 1), Color(0.85, 0.9, 0.85), 18)
+		_roster_list(say)
+		_host_controls(col)
 	elif st == "finding":
 		say.call("방 %s 을(를) 찾는 중이에요…" % Net.room)
 	elif st == "connecting" and Net.mode == "room":
@@ -457,33 +466,17 @@ func _online() -> void:
 	elif st == "connecting":
 		say.call("연결하는 중이에요…")
 	elif st == "connected":
-		say.call("연결됐어요!", Color(0.6, 1.0, 0.6), 30)
-		var theirs := str(Net.peer.get("kart", ""))
-		say.call("내 카트: %s   ·   친구 카트: %s" % [Game.kart_def(Game.save.kart).name, Game.kart_def(theirs).name if theirs != "" else "…"])
-		if Net.role == "host":
-			if _online_track == "":
-				_online_track = Game.tracks[0].id
-			say.call("트랙을 고르고 ‘출발’을 누르세요.")
-			var tr_row := HBoxContainer.new()
-			tr_row.add_theme_constant_override("separation", 10)
-			for t in Game.tracks:
-				var b := UI.button(("★ " if t.id == _online_track else "") + t.name, func(): _online_track = t.id; show_screen("online"), 270, 22)
-				tr_row.add_child(b)
-			col.add_child(tr_row)
-			var bots := UI.button("컴퓨터도 같이: " + ("함께" if _online_bots else "둘만"), func(): _online_bots = not _online_bots; show_screen("online"), 300, 22)
-			row.add_child(bots)
-			row.add_child(UI.button("출발!", _online_go, 200))
-			col.add_child(row)
-		else:
-			say.call("방장이 트랙을 고르고 출발하면 바로 시작해요.", Color(0.8, 0.9, 1.0))
+		say.call("들어왔어요! 방 %s" % Net.room if Net.room != "" else "연결됐어요!", Color(0.6, 1.0, 0.6), 28)
+		_roster_list(say)
+		say.call("방장이 트랙을 고르고 출발하면 바로 시작해요.", Color(0.8, 0.9, 1.0))
 	var bottom := HBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 14)
 	v.add_child(bottom)
 	bottom.add_child(UI.button("← 처음 화면", func():
-		if Net.status != "connected":
+		if not Net.connected():
 			Net.reset()
 		show_screen("title"), 220))
-	if st == "connected":
+	if st == "connected" or (st == "room" and Net.role == "host"):
 		bottom.add_child(UI.button("카트 바꾸기", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 220))
 	if Net.role != "":
 		bottom.add_child(UI.button("연결 끊고 처음부터", func(): Net.reset(); show_screen("online"), 280))
@@ -491,19 +484,55 @@ func _online() -> void:
 		say.call("(PC판에서는 온라인 연결이 안 돼요. 웹에서 해 주세요.)", Color(1.0, 0.7, 0.5), 18)
 	_focus_first(col)
 
+func _roster_list(say: Callable) -> void:
+	var list: Array = Net.roster.duplicate()
+	list.sort_custom(func(x, y): return int(x.pid) < int(y.pid))
+	say.call("참가자 %d / %d" % [list.size(), Net.MAX_PLAYERS], Color(1.0, 0.82, 0.3), 20)
+	var names := []
+	for e in list:
+		names.append("%s%s · %s" % [e.name, " (나)" if int(e.pid) == Net.my_pid else "", Game.kart_def(str(e.kart)).name])
+	say.call("   ".join(names), UI.CREAM, 19)
+
+func _host_controls(col: VBoxContainer) -> void:
+	if _online_track == "":
+		_online_track = Game.tracks[0].id
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 6)
+	for t in Game.tracks:
+		var b := UI.button(("★ " if t.id == _online_track else "") + t.name, func(): _online_track = t.id; show_screen("online"), 270, 19)
+		b.custom_minimum_size.y = 42
+		grid.add_child(b)
+	col.add_child(grid)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	var n := Net.roster.size()
+	row.add_child(UI.button("빈자리 컴퓨터: " + ("채움" if _online_bots else "없음"), func(): _online_bots = not _online_bots; show_screen("online"), 300, 20))
+	var go := UI.button("출발!" if n >= 2 else "친구를 기다리는 중", _online_go, 260)
+	go.disabled = n < 2
+	row.add_child(go)
+	col.add_child(row)
+
 func _online_go() -> void:
+	if Net.roster.size() < 2:
+		return
 	var r := RandomNumberGenerator.new()
 	r.randomize()
 	var def := Game.track_def(_online_track)
+	var players: Array = []
+	for e in Net.roster:
+		var kid := str(e.kart)
+		players.append({"pid": int(e.pid), "kart": kid if kid in Game.kart_ids() else "acorn", "name": str(e.name)})
+	players.sort_custom(func(x, y): return int(x.pid) < int(y.pid))
 	var setup := {
-		"track": _online_track, "host_kart": Game.save.kart, "guest_kart": str(Net.peer.get("kart", "acorn")),
-		"ai": bake_ai(6 if _online_bots else 0, int(def.level), r),
+		"track": _online_track, "players": players,
+		"ai": bake_ai(Net.MAX_PLAYERS - players.size() if _online_bots else 0, int(def.level), r),
 	}
-	if not (setup.guest_kart in Game.kart_ids()):
-		setup.guest_kart = "acorn"
 	Game.online_setup = setup
 	Game.mode = "online"
 	Game.track_id = _online_track
+	Net.locked = true
 	Net.send({"y": "go", "setup": setup})
 	get_tree().get_first_node_in_group("main").start_race()
 

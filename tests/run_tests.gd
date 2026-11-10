@@ -372,6 +372,8 @@ func _room_codes() -> void:
 	ok(seen.size() > 195, "방 코드가 겹치지 않는다")
 	ok(Rules.room_clean(" k7mp-2q ") == "K7MP2Q" and Rules.room_clean("K7MP2") == "" and Rules.room_clean("K7MP2QX") == "", "방 코드 다듬기")
 	var body := '{"id":"a","event":"open"}\n{"id":"b","event":"message","message":"O:TR1-first"}\n{"id":"c","event":"message","message":"A:TR1-ans"}\n{"id":"d","event":"message","message":"O:TR1-second"}\n'
+	var lst := Rules.relay_list(body)
+	ok(lst.size() == 3 and lst[0].id == "b" and lst[2].m == "O:TR1-second", "중계 글 목록 (메시지만, 순서대로)")
 	ok(Rules.relay_pick(body, "O:") == "TR1-second" and Rules.relay_pick(body, "A:") == "TR1-ans" and Rules.relay_pick("", "O:") == "", "중계 글에서 마지막 초대·답장 고르기")
 
 ## 게이지 밸런스: 톡톡이가 그냥 길게 끄는 것보다 빨리, 부스터 중엔 더 빨리, 비싼 카트일수록 잘 찬다. 후진 드리프트

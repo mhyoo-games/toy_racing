@@ -30,8 +30,9 @@ var touchpad: Control
 var _last_beep := 4
 var online := false
 var is_host := false
-var remote_human: Dictionary = {}
-var host_order: Array = []   ## 방장이 몰고 보내는 카트들 (방장 사람 + 컴퓨터) 순서
+var remote_humans: Array = []   ## 다른 사람들 카트 (온라인)
+var by_pid := {}                ## pid → 카트
+var host_order: Array = []      ## 방장이 모두에게 보내는 카트 순서 (사람들 → 컴퓨터)
 var _send_t := 0.0
 var _wait_remote := -1.0
 var _lost_said := false
@@ -68,7 +69,8 @@ func _ready() -> void:
 	online = mode == "online"
 	var setup: Dictionary = Game.online_setup if online else {}
 	is_host = online and Net.role == "host"
-	var n_humans := 2 if (duo or online) else 1
+	var players: Array = setup.get("players", []) if online else []
+	var n_humans := players.size() if online else (2 if duo else 1)
 	var specs: Array = []
 	if online:
 		specs = setup.get("ai", [])
@@ -84,20 +86,25 @@ func _ready() -> void:
 		human_slots.append(total - 1 - i if n_ai > 0 else i)
 	var ref_stats := {}
 	if online:
-		var mine: String = setup.host_kart if is_host else setup.guest_kart
-		var theirs: String = setup.guest_kart if is_host else setup.host_kart
-		var me := _make_racer(Game.kart_def(mine), human_slots[0 if is_host else 1], true)
-		me.who = 1
-		me.name = "나"
-		me.color = P_COLORS[0]
-		humans.append(me)
-		var you := _make_racer(Game.kart_def(theirs), human_slots[1 if is_host else 0], false)
-		you.remote = true
-		you.name = "친구"
-		you.color = P_COLORS[1]
-		remote_human = you
-		ref_stats = me.st if me.st.max_speed < you.st.max_speed else you.st
-		host_order.append(you if not is_host else me)
+		for j in players.size():
+			var pl: Dictionary = players[j]
+			var mine := int(pl.pid) == Net.my_pid
+			var r := _make_racer(Game.kart_def(str(pl.kart)), human_slots[j], mine)
+			if mine:
+				r.who = 1
+				r.name = "나"
+				r.color = P_COLORS[0]
+				humans.append(r)
+			else:
+				r.remote = true
+				r.name = str(pl.name)
+				r.color = Color.from_hsv(fposmod(0.55 + j * 0.13, 1.0), 0.6, 1.0)
+				remote_humans.append(r)
+			r.pid = int(pl.pid)
+			by_pid[int(pl.pid)] = r
+			host_order.append(r)
+			if ref_stats.is_empty() or r.st.max_speed < ref_stats.max_speed:
+				ref_stats = r.st
 	else:
 		for i in n_humans:
 			var kid: String = Game.save.kart if i == 0 else Game.save.kart2
@@ -155,7 +162,7 @@ func _make_racer(kdef: Dictionary, slot: int, human: bool) -> Dictionary:
 		"name": "", "color": Color.WHITE, "skill": 1.0, "offset": 0.0, "ref": {},
 		"hint": -1, "dist": Rules.locate(trk, k.pos).s - trk.length, "finish": -1.0, "place": slot + 1,
 		"coins": 0, "prev_up": false, "prev_boost": false, "start_press": -1.0, "wrong": 0.0, "steer": 0.0,
-		"lap": 1, "offroad_t": 0.0, "remote": false, "net": {},
+		"lap": 1, "offroad_t": 0.0, "remote": false, "net": {}, "pid": -1, "gone": false,
 	}
 	racers.append(r)
 	return r
@@ -250,7 +257,7 @@ func _physics_process(dt: float) -> void:
 			Sound.skid(h.who, (k.drift or absf(float(k.slip)) > 0.15) and state != "count", maxf(slide, 0.35 if k.drift else 0.0), humans.size())
 	if _wait_remote > 0.0 and end_wait < 0.0:
 		_wait_remote -= dt
-		if _wait_remote <= 0.0 or remote_human.finish >= 0.0 or not Net.connected():
+		if _wait_remote <= 0.0 or _remotes_done() or not Net.connected():
 			_wait_remote = 0.0
 			state = "end"
 			end_wait = 2.0
@@ -296,8 +303,8 @@ func _drive(dt: float) -> void:
 	var lead_human := -INF
 	for h in humans:
 		lead_human = maxf(lead_human, h.dist)
-	if not remote_human.is_empty():
-		lead_human = maxf(lead_human, remote_human.dist)
+	for rh in remote_humans:
+		lead_human = maxf(lead_human, rh.dist)
 	for r in racers:
 		var k: Dictionary = r.k
 		if r.remote:
@@ -357,7 +364,7 @@ func _drive(dt: float) -> void:
 			if r.human:
 				Sound.play("finish")
 				if online:
-					Net.send({"y": "fin", "t": clock})
+					Net.send({"y": "fin", "pid": Net.my_pid, "t": clock})
 				_check_end()
 		elif lap > r.lap and r.human and r.finish < 0.0 and before > 0.0:
 			if lap == trk.laps:
@@ -514,8 +521,8 @@ func _check_end() -> void:
 	for h in humans:
 		if h.finish < 0.0:
 			humans_done = false
-	if online and humans_done and not remote_human.is_empty() and remote_human.finish < 0.0 and Net.connected():
-		# 친구가 들어올 때까지 조금 기다린다
+	if online and humans_done and not _remotes_done() and Net.connected():
+		# 다른 사람들이 들어올 때까지 조금 기다린다
 		if _wait_remote < 0.0:
 			_wait_remote = 25.0
 			humans[0].hud.say("친구를 기다리는 중…", Color(0.8, 0.9, 1.0), 3.0)
@@ -555,7 +562,7 @@ func _finish() -> void:
 
 func leave() -> void:
 	if online:
-		Net.send({"y": "bye"})
+		Net.send({"y": "bye", "pid": Net.my_pid})
 	for h in humans:
 		Sound.engine_on(h.who, false)
 		Sound.skid(h.who, false)
@@ -602,13 +609,20 @@ func _follow_net(r: Dictionary, dt: float) -> void:
 	k.pos = (k.pos as Vector2).lerp(want, 1.0 - exp(-12.0 * dt))
 	k.yaw = lerp_angle(float(k.yaw), float(r.net.yaw), 1.0 - exp(-12.0 * dt))
 
+## 다른 사람들이 모두 들어왔거나 나갔나
+func _remotes_done() -> bool:
+	for rh in remote_humans:
+		if rh.finish < 0.0 and not rh.get("gone", false):
+			return false
+	return true
+
 func _net_tick(dt: float) -> void:
 	if not Net.connected():
 		if not _lost_said and not humans.is_empty():
 			_lost_said = true
-			humans[0].hud.say("친구와 연결이 끊겼어요", Color(1, 0.5, 0.4), 4.0)
-			if not remote_human.is_empty():
-				remote_human.remote = true
+			humans[0].hud.say("연결이 끊겼어요", Color(1, 0.5, 0.4), 4.0)
+			for rh in remote_humans:
+				rh.gone = true
 			if state == "end" or humans[0].finish >= 0.0:
 				_check_end()
 		return
@@ -629,19 +643,32 @@ func _on_net(m: Dictionary) -> void:
 		"s":
 			var arr: Array = m.get("k", [])
 			if is_host:
-				if arr.size() > 0:
-					_apply(remote_human, arr[0])
+				# 친구가 보낸 자기 카트
+				var r: Dictionary = by_pid.get(int(m.get("from", -1)), {})
+				if not r.is_empty() and r.remote and arr.size() > 0:
+					_apply(r, arr[0])
 			else:
 				for i in mini(arr.size(), host_order.size()):
-					_apply(host_order[i], arr[i])
+					if host_order[i].remote:
+						_apply(host_order[i], arr[i])
 		"fin":
-			if remote_human.finish < 0.0:
-				remote_human.finish = float(m.t)
+			var pid := int(m.get("pid", m.get("from", -1)))
+			var rf: Dictionary = by_pid.get(pid, {})
+			if not rf.is_empty() and rf.remote and rf.finish < 0.0:
+				rf.finish = float(m.t)
+			if is_host:
+				Net.send({"y": "fin", "pid": pid, "t": m.t}, false, -1, int(m.get("from", -1)))
 			_check_end()
-		"bye":
-			if not humans.is_empty():
-				humans[0].hud.say("친구가 경주를 그만뒀어요", Color(1, 0.6, 0.4), 3.0)
-			remote_human.finish = maxf(remote_human.finish, -1.0)
+		"bye", "left":
+			var pid2 := int(m.get("pid", m.get("from", -1)))
+			var rb: Dictionary = by_pid.get(pid2, {})
+			if not rb.is_empty() and rb.remote:
+				rb.gone = true
+				if not humans.is_empty():
+					humans[0].hud.say("%s 나갔어요" % rb.name, Color(1, 0.6, 0.4), 3.0)
+			if is_host and m.get("y") == "bye":
+				Net.send({"y": "left", "pid": pid2}, false, -1, pid2)
+			_check_end()
 
 ## 카트 높이·앞뒤 기울기를 트랙에 맞춘다 (다리·비탈)
 func _set_height(k: Dictionary, loc: Dictionary, dt: float) -> void:

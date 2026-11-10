@@ -724,6 +724,19 @@ static func room_clean(t: String) -> String:
 	return out if out.length() == ROOM_LEN else ""
 
 ## 중계에 쌓인 글 중 마지막 "O:"(초대) 또는 "A:"(답장)
+## 중계 글 목록 [{id, m}] (줄마다 JSON, 메시지만)
+static func relay_list(body: String) -> Array:
+	var out := []
+	for line in body.split("\n", false):
+		var j := JSON.new()
+		if j.parse(line) != OK or typeof(j.data) != TYPE_DICTIONARY:
+			continue
+		var d: Dictionary = j.data
+		if str(d.get("event", "message")) != "message":
+			continue
+		out.append({"id": str(d.get("id", "")), "m": str(d.get("message", ""))})
+	return out
+
 static func relay_pick(body: String, prefix: String) -> String:
 	var found := ""
 	for line in body.split("\n", false):

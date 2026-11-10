@@ -71,8 +71,8 @@ func choose(id: String, who := 1) -> void:
 	if id in save.owned:
 		save["kart" if who == 1 else "kart2"] = id
 		write_save()
-		if who == 1 and Net.connected():
-			Net.send({"y": "me", "kart": id, "name": "방장" if Net.role == "host" else "친구"})
+		if who == 1 and Net.role in ["host", "guest"]:
+			Net.my_kart_changed(id)
 
 func best_of(track: String) -> float:
 	return float(save.best.get(track, -1.0))
