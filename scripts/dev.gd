@@ -80,6 +80,13 @@ func _run() -> void:
 			await _race("duo", [5.0, 9.0])
 		"time":
 			await _race("time", [5.0])
+		"items":
+			Game.items = true
+			await _race("race", [6.0, 12.0, 18.0, 26.0])
+			var it = main().race.items
+			print("아이템 통계 ", it.stats, " 날아가는 것 ", it.shots.size(), " 함정 ", it.traps.size(), " 내 아이템 ", main().race.humans[0].k.items)
+		"tour":
+			await _race("time", [8.0, 16.0, 24.0, 32.0, 40.0])
 		"pause":
 			await _race("race", [2.0])
 			main().race.pause_menu.open()

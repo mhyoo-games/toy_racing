@@ -35,6 +35,8 @@ var host_order: Array = []   ## 방장이 몰고 보내는 카트들 (방장 사
 var _send_t := 0.0
 var _wait_remote := -1.0
 var _lost_said := false
+var items_on := false
+var items: Node3D
 
 ## 컴퓨터 상대 설정 (온라인이면 방장이 만들어 친구에게 보낸다)
 static func make_ai_specs(n: int, level: int, r: RandomNumberGenerator) -> Array:
@@ -122,6 +124,13 @@ func _ready() -> void:
 		ai_i += 1
 	if online:
 		Net.message.connect(_on_net)
+	items_on = Game.items and mode in ["race", "duo"]
+	if items_on:
+		for r in racers:
+			r.k.no_gauge = true
+		items = preload("res://scripts/race_items.gd").new()
+		add_child(items)
+		items.setup(self)
 	_place_coins()
 	_make_views()
 	if DisplayServer.is_touchscreen_available() and not duo:
@@ -131,7 +140,7 @@ func _ready() -> void:
 	_make_pause()
 	for r in racers:
 		_show(r, 0.0, 0.016)
-	Sound.music("race")
+	Sound.music(str(def.get("music", "race")))
 	for h in humans:
 		Sound.engine_on(h.who, true)
 
@@ -168,11 +177,12 @@ func _place_coins() -> void:
 			mi.mesh = cm
 			mi.rotation.x = PI / 2
 			var holder := Node3D.new()
-			holder.position = Vector3(p.x, 1.0, p.y)
+			var ch := Rules.height_at(trk, i)
+			holder.position = Vector3(p.x, 1.0 + ch, p.y)
 			holder.add_child(mi)
 			mi.material_override = KartView.mat(Color(1.0, 0.8, 0.2), true)
 			add_child(holder)
-			coins.append({"pos": p, "node": holder, "away": 0.0})
+			coins.append({"pos": p, "node": holder, "away": 0.0, "h": ch})
 
 func _make_views() -> void:
 	var ui := CanvasLayer.new()
@@ -293,9 +303,9 @@ func _drive(dt: float) -> void:
 		if r.remote:
 			_follow_net(r, dt)
 			continue
-		var loc := Rules.locate(trk, k.pos, r.hint)
+		var loc := Rules.locate(trk, k.pos, r.hint, float(k.get("h", 0.0)))
 		r.hint = loc.i
-		k.offroad = Rules.surface(trk, loc.lat) == "grass"
+		k.offroad = Rules.surface_at(trk, loc) == "grass"
 		var inp: Dictionary
 		var st: Dictionary = r.st
 		if r.human and r.finish < 0.0 and not autopilot:
@@ -303,6 +313,9 @@ func _drive(dt: float) -> void:
 			var up: bool = c.throttle > 0.0
 			inp = {"throttle": c.throttle, "steer": c.steer, "drift": c.drift,
 				"accel_tap": up and not r.prev_up, "use_boost": c.boost and not r.prev_boost}
+			if items_on and inp.use_boost:
+				items.use(r)
+				inp.use_boost = false
 			r.prev_up = up
 			r.prev_boost = c.boost
 		else:
@@ -314,16 +327,21 @@ func _drive(dt: float) -> void:
 				st.boost_time = r.st.boost_time
 			if r.finish >= 0.0:
 				inp.throttle = 0.6 if r.human else inp.throttle
+			if items_on and not r.human and not (k.items as Array).is_empty():
+				_ai_item(r, loc)
 		r.steer = lerpf(r.steer, float(inp.steer), 1.0 - exp(-12.0 * dt))
 		Rules.step(k, inp, st, dt)
-		if Rules.wall_push(trk, k, Rules.locate(trk, k.pos, r.hint)):
+		if Rules.wall_push(trk, k, Rules.locate(trk, k.pos, r.hint, float(k.get("h", 0.0)))):
 			if absf(Rules.speed_of(k)) > 6.0:
 				k.events.append("bump")
 	_collide()
+	if items_on:
+		items.tick(dt)
 	for r in racers:
 		var k: Dictionary = r.k
-		var loc := Rules.locate(trk, k.pos, r.hint)
+		var loc := Rules.locate(trk, k.pos, r.hint, float(k.get("h", 0.0)))
 		r.hint = loc.i
+		_set_height(k, loc, dt)
 		if r.remote:
 			k.events.clear()
 			continue
@@ -344,6 +362,7 @@ func _drive(dt: float) -> void:
 		elif lap > r.lap and r.human and r.finish < 0.0 and before > 0.0:
 			if lap == trk.laps:
 				r.hud.say("마지막 바퀴!", Color(1, 0.6, 0.4), 1.8)
+				Sound.music("rush")   # 마지막 바퀴는 긴박한 곡
 			else:
 				r.hud.say("%d 바퀴째" % lap, Color(0.9, 0.95, 1.0))
 			Sound.play("lap")
@@ -368,6 +387,20 @@ func _events(r: Dictionary) -> void:
 		match e:
 			"drift_start", "drift_flip":
 				Sound.play("screech", -3.0 if humans.size() == 1 else -7.0, randf_range(0.95, 1.06))
+			"item_get":
+				Sound.play("item")
+				var its: Array = r.k.items
+				if not its.is_empty():
+					hud.say(Rules.ITEM_NAMES.get(its[its.size() - 1], ""), Color(0.6, 0.9, 1.0), 1.0)
+			"spin":
+				Sound.play("hit")
+				for c in cams:
+					if c.racer == r:
+						c.shake = 0.4
+			"shield", "shield_break":
+				Sound.play("shield")
+			"throw", "drop", "wind":
+				Sound.play("throw")
 			"drift_tap":
 				Sound.play("screech", -9.0 if humans.size() == 1 else -12.0, randf_range(1.08, 1.18))
 			"mini_boost":
@@ -395,6 +428,8 @@ func _collide() -> void:
 		for j in range(i + 1, racers.size()):
 			var a: Dictionary = racers[i].k
 			var b: Dictionary = racers[j].k
+			if absf(float(a.get("h", 0.0)) - float(b.get("h", 0.0))) > 2.0:
+				continue   # 다리 위·아래
 			var d: Vector2 = (b.pos as Vector2) - (a.pos as Vector2)
 			var dist := d.length()
 			if dist >= rad * 2.0 or dist < 0.001:
@@ -431,7 +466,7 @@ func _coins(dt: float) -> void:
 			node.visible = c.away <= 0.0
 			continue
 		for r in racers:
-			if (r.k.pos as Vector2).distance_squared_to(c.pos) < 2.2 * 2.2:
+			if (r.k.pos as Vector2).distance_squared_to(c.pos) < 2.2 * 2.2 and absf(float(r.k.get("h", 0.0)) - float(c.h)) < 2.0:
 				c.away = 6.0
 				node.visible = false
 				if r.human and r.finish < 0.0:
@@ -459,13 +494,15 @@ func _cameras(dt: float) -> void:
 		var spd := absf(Rules.speed_of(k))
 		c.spd = lerpf(float(c.get("spd", 0.0)), spd, 1.0 - exp(-2.0 * dt))
 		var back := 6.4 + float(c.spd) * 0.04
-		var pos := Vector3(p.x - f.x * back, 2.9 + float(c.spd) * 0.015, p.y - f.y * back)
+		var kh: float = float(k.get("h", 0.0))
+		c.h = lerpf(float(c.get("h", kh)), kh, 1.0 - exp(-6.0 * dt))
+		var pos := Vector3(p.x - f.x * back, 2.9 + float(c.spd) * 0.015 + float(c.h), p.y - f.y * back)
 		var cam: Camera3D = c.cam
 		if c.shake > 0.0:
 			c.shake = maxf(0.0, c.shake - dt)
 			pos += Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1)) * c.shake * 0.5
 		cam.position = pos
-		cam.look_at(Vector3(p.x + f.x * 3.0, 1.0, p.y + f.y * 3.0), Vector3.UP)
+		cam.look_at(Vector3(p.x + f.x * 3.0, 1.0 + float(c.h), p.y + f.y * 3.0), Vector3.UP)
 		var want := 68.0 + (12.0 if k.boost_t > 0.0 else (6.0 if k.mini_t > 0.0 else 0.0)) + spd * 0.12
 		c.fov = lerpf(c.fov, want, 1.0 - exp(-2.2 * dt))
 		cam.fov = c.fov
@@ -605,3 +642,32 @@ func _on_net(m: Dictionary) -> void:
 			if not humans.is_empty():
 				humans[0].hud.say("친구가 경주를 그만뒀어요", Color(1, 0.6, 0.4), 3.0)
 			remote_human.finish = maxf(remote_human.finish, -1.0)
+
+## 카트 높이·앞뒤 기울기를 트랙에 맞춘다 (다리·비탈)
+func _set_height(k: Dictionary, loc: Dictionary, dt: float) -> void:
+	var h: float = loc.h
+	var i: int = loc.i
+	var m: int = trk.n
+	var slope: float = (Rules.height_at(trk, (i + 2) % m) - Rules.height_at(trk, (i - 2 + m) % m)) / 8.0
+	var dir := signf(Rules.fwd(k.yaw).dot(loc.tan))
+	k.h = h
+	k.pitch = lerpf(float(k.get("pitch", 0.0)), atan(slope) * dir, 1.0 - exp(-10.0 * dt))
+
+## 컴퓨터 아이템 쓰기
+func _ai_item(r: Dictionary, loc: Dictionary) -> void:
+	var ahead := INF
+	var behind := INF
+	for o in racers:
+		if o == r:
+			continue
+		var d: float = o.dist - r.dist
+		if d > 0.0:
+			ahead = minf(ahead, d)
+		else:
+			behind = minf(behind, -d)
+	var bend := 0.0
+	for o2 in [4, 8, 12]:
+		bend = maxf(bend, absf(float(trk.curv[(int(loc.i) + o2) % trk.n])) * 30.0)
+	var it: String = (r.k.items as Array)[0]
+	if Rules.ai_use_item(it, r.place, ahead, behind, bend < 0.3, items.threatened(r), rng.randf()):
+		items.use(r)

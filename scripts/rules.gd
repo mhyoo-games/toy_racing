@@ -7,7 +7,9 @@ extends RefCounted
 
 const KMH := 5.0                 ## 화면에 보이는 속도 = 속력 × KMH
 const MAX_BOOSTS := 2            ## 부스터는 두 개까지 모은다
-const MINI_WINDOW := 0.35        ## 드리프트가 끝난 뒤 순간부스터를 쓸 수 있는 시간(초)
+const MINI_WINDOW := 0.35        ## 드리프트가 끝난 뒤 순간부스터를 쓸 수 있는 시간(초) — 펴지기 시작할 때부터 열린다
+const MINI_EARLY := 0.12         ## 이만큼 일찍 눌러도 순간부스터로 쳐 준다
+const MINI_TIME := 0.7           ## 순간부스터 길이
 const START_WINDOW := 0.4        ## 출발 직전 이 시간 안에 가속을 누르면 출발 부스터
 const DRIFT_MIN_SPEED := 9.0
 const STEER_IN := 5.5            ## 핸들이 꺾이는 빠르기 (1/초, 끝까지 약 0.18초)
@@ -46,7 +48,8 @@ static func new_kart(pos: Vector2, yaw: float) -> Dictionary:
 		"drift": false, "drift_dir": 0, "drift_time": 0.0,
 		"gauge": 0.0, "boosts": 0, "boost_t": 0.0, "mini_t": 0.0, "window_t": 0.0,
 		"slip": 0.0, "offroad": false, "events": [],
-		"steer_s": 0.0, "recover": 1.0, "prev_key": false, "tap_cd": 0.0,
+		"steer_s": 0.0, "recover": 1.0, "prev_key": false, "tap_cd": 0.0, "win_open": false, "tap_buf": 0.0,
+		"spin_t": 0.0, "shield_t": 0.0, "items": [], "no_gauge": false,
 	}
 
 static func fwd(yaw: float) -> Vector2:
@@ -81,6 +84,10 @@ static func top_speed(k: Dictionary, st: Dictionary) -> float:
 ##   방향만 돌 뿐 속도 크기는 미끄러지는 만큼만 조금씩 준다 → 드리프트해도 속도가 살아 있다.
 ##   드리프트가 끝나면 접지력이 RECOVER_TIME에 걸쳐 돌아온다 → Shift를 짧게 끊어 치면 속도를 잃지 않고 방향만 꺾인다(톡톡이). 직선에서 좌우로 톡톡 치면 앞으로 가며 게이지가 찬다(커팅).
 static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> void:
+	if float(k.get("spin_t", 0.0)) > 0.0:
+		_spin_step(k, dt)
+		return
+	k.shield_t = maxf(0.0, float(k.get("shield_t", 0.0)) - dt)
 	var throttle: float = clampf(float(inp.get("throttle", 0.0)), -1.0, 1.0)
 	var raw: float = clampf(float(inp.get("steer", 0.0)), -1.0, 1.0)
 	# ── 핸들을 부드럽게 (키보드도 0 → 1 이 한 번에 가지 않게)
@@ -103,7 +110,8 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 		va = atan2(-vel.x, -vel.y)   # 뒤로 갈 때는 '움직이는 반대 방향'을 기준으로
 	var top := top_speed(k, st)
 	# 후진 드리프트: 뒤로 가면서 드리프트 키 + 방향키 → 뒤가 미끄러지며 크게 돈다 (벽에서 돌려 나오기)
-	var rev_drift: bool = backward and sp < -3.0 and inp.get("drift", false) and absf(raw) > 0.3
+	var rev_drift: bool = backward and sp < -1.2 and inp.get("drift", false) and absf(raw) > 0.3
+	var brake_drift: bool = k.drift and throttle < 0.0   # 드리프트 중 ↓: 급브레이크 대신 더 크게 돈다 (U턴)
 
 	# ── 드리프트 키를 새로 눌렀나 (톡톡이)
 	var key: bool = inp.get("drift", false)
@@ -161,6 +169,10 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 		else:
 			var amt2 := 0.62 + 0.42 * push
 			target_w = -dir * st.turn * 1.08 * amt2
+		if brake_drift and push > -0.2:
+			target_w = -dir * st.turn * 1.08 * (1.0 + 0.4 * maxf(push, 0.0)) * 1.3
+			grip = DRIFT_GRIP * 0.8
+			ending = false
 	else:
 		var low := clampf(absf(sp) / 7.0, 0.35, 1.0)   # 멈춰 있어도 조금은 돈다
 		var high := 1.0 - 0.22 * clampf(sp / st.max_speed, 0.0, 1.2)
@@ -191,10 +203,12 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 			var drift_acc := lerpf(1.0, 0.35, clampf(absf(slip) / 0.4, 0.0, 1.0)) if k.drift else 1.0   # 조금만 미끄러지면 가속이 거의 산다 (톡톡이·커팅)
 			sp = minf(top, sp + st.accel * throttle * curve * along * drift_acc * dt)
 	elif throttle < 0.0:
-		if sp > 0.5:
+		if brake_drift:
+			sp = maxf(0.0, sp - 9.0 * dt)
+		elif sp > 0.5:
 			sp = maxf(0.0, sp - 38.0 * dt)
 		else:
-			sp = maxf(-9.0, sp - 14.0 * dt)
+			sp = maxf(-10.0, sp - 14.0 * dt)
 	else:
 		sp = move_toward(sp, 0.0, 5.0 * dt)
 	if sp > top:  # 부스터가 끝났거나 잔디에 들어가면 천천히 최고 속력으로
@@ -218,19 +232,31 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 			_tap_bonus(k, st, sp)
 		elif (ending and absf(slip) < 0.12) or sp < 6.0 or (not held and k.drift_time > 0.12 and slip * dir2 < -0.05):
 			k.drift = false
+	# ── 순간부스터 기회: 드리프트가 펴지기 시작하는 순간부터 끝난 뒤 잠깐까지
+	var tap_up: bool = inp.get("accel_tap", false)
+	if k.drift and ending and k.drift_time > 0.18 and not bool(k.get("win_open", false)):
+		k.win_open = true
+		k.window_t = MINI_WINDOW + 0.15
 	if was_drift and not k.drift:
 		k.events.append("drift_end")
 		k.recover = 0.0
-		if k.drift_time > 0.18:
-			k.window_t = MINI_WINDOW
-
-	# ── 순간부스터: 드리프트가 끝난 직후 가속 키를 다시 누른다
-	if k.window_t > 0.0 and inp.get("accel_tap", false) and not k.drift:
+		if k.drift_time > 0.18 or bool(k.get("win_open", false)):
+			k.window_t = maxf(float(k.window_t), MINI_WINDOW)
+	if not k.drift:
+		k.win_open = false
+	# 살짝 일찍 누른 것도 기억해 둔다
+	if tap_up and k.window_t <= 0.0 and k.drift:
+		k.tap_buf = MINI_EARLY
+	k.tap_buf = maxf(0.0, float(k.get("tap_buf", 0.0)) - dt)
+	if k.window_t > 0.0 and (tap_up or float(k.tap_buf) > 0.0):
 		k.window_t = 0.0
-		k.mini_t = maxf(k.mini_t, 0.6)
+		k.tap_buf = 0.0
+		k.mini_t = maxf(k.mini_t, MINI_TIME)
 		k.events.append("mini_boost")
 
-	# ── 게이지가 차면 부스터 하나
+	# ── 게이지가 차면 부스터 하나 (아이템전은 게이지 없음)
+	if k.get("no_gauge", false):
+		k.gauge = 0.0
 	if k.gauge >= 1.0:
 		k.gauge -= 1.0
 		if k.boosts < MAX_BOOSTS:
@@ -239,8 +265,8 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 		else:
 			k.gauge = 0.0
 
-	# ── 부스터 쓰기
-	if inp.get("use_boost", false) and k.boosts > 0 and k.boost_t < 0.3:
+	# ── 부스터 쓰기 (아이템전에서는 부르는 쪽이 아이템으로 처리)
+	if inp.get("use_boost", false) and k.boosts > 0 and k.boost_t < 0.3 and not k.get("no_gauge", false):
 		k.boosts -= 1
 		k.boost_t = st.boost_time
 		k.events.append("boost")
@@ -280,15 +306,22 @@ static func _cr(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float) ->
 	return 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 
 ## 트랙 정의(tracks.json의 한 항목)로 가운데 선을 `spacing` 간격 점으로 만든다.
+## 조절점에 세 번째 값이 있으면 높이(다리·고가). 높이가 BRIDGE_H 넘는 곳은 잔디 없이 난간.
+const BRIDGE_H := 0.6
+
 static func build_track(def: Dictionary, spacing := 2.0) -> Dictionary:
 	var ctrl: Array[Vector2] = []
+	var ch: Array[float] = []
 	for p in def.points:
 		ctrl.append(Vector2(p[0], p[1]))
+		ch.append(float(p[2]) if p.size() > 2 else 0.0)
 	var n := ctrl.size()
 	var dense: Array[Vector2] = []
+	var dense_h: Array[float] = []
 	for i in n:
 		for j in 24:
 			dense.append(_cr(ctrl[(i - 1 + n) % n], ctrl[i], ctrl[(i + 1) % n], ctrl[(i + 2) % n], j / 24.0))
+			dense_h.append(_cr(Vector2(ch[(i - 1 + n) % n], 0), Vector2(ch[i], 0), Vector2(ch[(i + 1) % n], 0), Vector2(ch[(i + 2) % n], 0), j / 24.0).x)
 	# 같은 간격으로 다시 고르기
 	var total := 0.0
 	for i in dense.size():
@@ -296,6 +329,7 @@ static func build_track(def: Dictionary, spacing := 2.0) -> Dictionary:
 	var count := maxi(16, int(round(total / spacing)))
 	var step_len := total / count
 	var pts := PackedVector2Array()
+	var raw_h := PackedFloat32Array()
 	var acc := 0.0
 	var want := 0.0
 	for i in dense.size():
@@ -303,10 +337,20 @@ static func build_track(def: Dictionary, spacing := 2.0) -> Dictionary:
 		var b := dense[(i + 1) % dense.size()]
 		var seg := a.distance_to(b)
 		while want <= acc + seg and pts.size() < count:
-			pts.append(a.lerp(b, (want - acc) / maxf(seg, 0.0001)))
+			var f := (want - acc) / maxf(seg, 0.0001)
+			pts.append(a.lerp(b, f))
+			raw_h.append(lerpf(dense_h[i], dense_h[(i + 1) % dense.size()], f))
 			want += step_len
 		acc += seg
 	var m := pts.size()
+	# 높이를 부드럽게 (꺾이지 않게)
+	var hgt := PackedFloat32Array()
+	hgt.resize(m)
+	for i in m:
+		var sum := 0.0
+		for o in range(-3, 4):
+			sum += raw_h[(i + o + m) % m]
+		hgt[i] = maxf(0.0, sum / 7.0)
 	var tang := PackedVector2Array()
 	var norm := PackedVector2Array()
 	var cum := PackedFloat32Array()
@@ -325,14 +369,46 @@ static func build_track(def: Dictionary, spacing := 2.0) -> Dictionary:
 		var b2 := tang[(i + 2) % m]
 		curv[i] = a2.angle_to(b2) / (4.0 * step_len)
 	var hw: float = def.get("half_width", 8.0)
+	var ground_wall: float = hw + float(def.get("verge", 7.0))
+	var walls := PackedFloat32Array()
+	walls.resize(m)
+	var bridge := false
+	for i in m:
+		walls[i] = hw + 0.9 if hgt[i] > BRIDGE_H else ground_wall
+		bridge = bridge or hgt[i] > BRIDGE_H
 	return {
 		"pts": pts, "tan": tang, "nrm": norm, "cum": cum, "curv": curv, "length": s, "n": m,
-		"half_width": hw, "wall": hw + float(def.get("verge", 7.0)), "laps": int(def.get("laps", 3)),
+		"half_width": hw, "wall": ground_wall, "laps": int(def.get("laps", 3)),
+		"hgt": hgt, "walls": walls, "has_bridge": bridge,
 	}
+
+## 출발선부터 거리 s 인 가운데 선 위치 {pos, tan, nrm, h, i}
+static func point_at(tr: Dictionary, s: float) -> Dictionary:
+	var L: float = tr.length
+	var x := fposmod(s, L)
+	var cum: PackedFloat32Array = tr.cum
+	var lo := 0
+	var hi: int = tr.n - 1
+	while lo < hi:
+		var mid := (lo + hi + 1) >> 1
+		if cum[mid] <= x:
+			lo = mid
+		else:
+			hi = mid - 1
+	var i := lo
+	var j: int = (i + 1) % tr.n
+	var seg: float = (cum[j] if j > 0 else L) - cum[i]
+	var t := clampf((x - cum[i]) / maxf(seg, 0.001), 0.0, 1.0)
+	var p: Vector2 = (tr.pts[i] as Vector2).lerp(tr.pts[j], t)
+	return {"pos": p, "tan": tr.tan[i], "nrm": tr.nrm[i], "h": lerpf(height_at(tr, i), height_at(tr, j), t), "i": i}
+
+## i번 점 높이
+static func height_at(tr: Dictionary, i: int) -> float:
+	return float(tr.hgt[i]) if tr.has("hgt") else 0.0
 
 ## 가장 가까운 가운데 선 위치. hint(지난번 번호)가 있으면 그 근처만 본다.
 ## 돌려주는 것: {i, s(출발선부터 거리), lat(오른쪽 +), point, tan}
-static func locate(tr: Dictionary, pos: Vector2, hint := -1) -> Dictionary:
+static func locate(tr: Dictionary, pos: Vector2, hint := -1, y := -1.0) -> Dictionary:
 	var pts: PackedVector2Array = tr.pts
 	var m: int = tr.n
 	var best := -1
@@ -346,9 +422,14 @@ static func locate(tr: Dictionary, pos: Vector2, hint := -1) -> Dictionary:
 		if bd > 30.0 * 30.0:
 			best = -1
 	if best < 0:
+		# 전체에서 찾기. 높이(y)를 알면 다른 층(다리 위·아래)을 덜 고른다
 		bd = INF
+		var has_h: bool = y >= 0.0 and tr.has("hgt")
 		for j in m:
 			var d := pts[j].distance_squared_to(pos)
+			if has_h:
+				var dh: float = float(tr.hgt[j]) - y
+				d += dh * dh * 6.0
 			if d < bd:
 				bd = d; best = j
 	# 이웃 선분 둘 중 더 가까운 쪽에 비춰 본다
@@ -366,16 +447,24 @@ static func locate(tr: Dictionary, pos: Vector2, hint := -1) -> Dictionary:
 			var tn := ab.normalized()
 			var nn := Vector2(-tn.y, tn.x)
 			var s: float = tr.cum[seg[0]] + ab.length() * t
-			res = {"i": best, "s": fposmod(s, tr.length), "lat": (pos - q).dot(nn), "point": q, "tan": tn}
+			var h := lerpf(height_at(tr, seg[0]), height_at(tr, seg[1]), t)
+			var wl: float = tr.walls[best] if tr.has("walls") else tr.wall
+			res = {"i": best, "s": fposmod(s, tr.length), "lat": (pos - q).dot(nn), "point": q, "tan": tn, "h": h, "wall": wl}
 	return res
 
 ## 바닥 종류: "road" 도로, "grass" 잔디(느림), 울타리 밖은 벽으로 막힌다
 static func surface(tr: Dictionary, lat: float) -> String:
 	return "road" if absf(lat) <= tr.half_width else "grass"
 
+## 위치로 바닥 종류 (다리 위는 난간까지 다 도로)
+static func surface_at(tr: Dictionary, loc: Dictionary) -> String:
+	if float(loc.get("wall", tr.wall)) < tr.half_width + 1.5:
+		return "road"
+	return surface(tr, loc.lat)
+
 ## 울타리 밖으로 나가면 안으로 밀고 바깥쪽 속도를 없앤다. 부딪혔으면 true
 static func wall_push(tr: Dictionary, k: Dictionary, loc: Dictionary, radius := 0.8) -> bool:
-	var lim: float = tr.wall - radius
+	var lim: float = float(loc.get("wall", tr.wall)) - radius
 	if absf(loc.lat) <= lim:
 		return false
 	var tn: Vector2 = loc.tan
@@ -482,6 +571,12 @@ static func ai_input(k: Dictionary, tr: Dictionary, line: PackedFloat32Array, lo
 		steer = signf(bend) if absf(steer) < 0.4 else steer
 	var throttle := 1.0
 	if absf(ang) > 1.2 and spd > 12.0:
+		throttle = -1.0
+	# 머리핀처럼 아주 급한 굽이: 들어가기 전에 속도를 줄인다
+	var hard := 0.0
+	for o in [3, 6, 9]:
+		hard = maxf(hard, absf(float(tr.curv[(loc.i + o) % m])) * 30.0)
+	if hard > 1.25 and not k.drift and spd > 21.0:
 		throttle = -1.0
 	if spd < 3.0 and absf(ang) > 1.4:
 		# 벽에 붙어 멈췄으면 뒤로 빼면서 돈다
@@ -642,3 +737,84 @@ static func relay_pick(body: String, prefix: String) -> String:
 		if m.begins_with(prefix):
 			found = m.substr(prefix.length())
 	return found
+
+# ────────────────────────── 아이템전 ──────────────────────────
+## 아이템: boost 부스터, pinecone 솔방울(앞으로 던짐), acorn 도토리 함정(뒤에 둠), bees 꿀벌 떼(바로 앞 카트를 쫓음),
+##          shield 잎사귀 방패(한 번 막음), wind 회오리바람(앞의 카트가 모두 잠깐 빙글)
+const ITEMS := ["boost", "pinecone", "acorn", "bees", "shield", "wind"]
+const ITEM_NAMES := {"boost": "부스터", "pinecone": "솔방울", "acorn": "도토리 함정", "bees": "꿀벌 떼", "shield": "잎사귀 방패", "wind": "회오리바람"}
+const MAX_ITEMS := 2
+const SPIN_TIME := 1.2
+const SHIELD_TIME := 6.0
+
+## 순위에 따른 아이템 확률 (앞일수록 지키는 것, 뒤일수록 따라잡는 것). place 1부터, rnd 0..1
+static func item_roll(place: int, racers: int, rnd: float) -> String:
+	var back := 0.0 if racers <= 1 else clampf(float(place - 1) / float(racers - 1), 0.0, 1.0)   # 0 = 1등, 1 = 꼴찌
+	var w := {
+		"boost": 1.0 + 2.0 * back,
+		"pinecone": 2.0,
+		"acorn": 2.2 - 1.6 * back,
+		"bees": 0.2 + 2.4 * back if place > 1 else 0.0,
+		"shield": 1.6 - 1.0 * back,
+		"wind": 0.0 if back < 0.5 else (back - 0.5) * 2.4,
+	}
+	var total := 0.0
+	for k in ITEMS:
+		total += float(w[k])
+	var x := rnd * total
+	for k in ITEMS:
+		x -= float(w[k])
+		if x <= 0.0:
+			return k
+	return "boost"
+
+## 아이템 상자를 먹었을 때. 칸이 다 찼으면 아무것도 안 생긴다
+static func give_item(k: Dictionary, item: String) -> bool:
+	var items: Array = k.get("items", [])
+	if items.size() >= MAX_ITEMS:
+		return false
+	items.append(item)
+	k.items = items
+	return true
+
+## 맞았다: 방패가 있으면 방패만 깨지고, 아니면 빙글빙글 (돌려주는 것: 실제로 빙글 돌았나)
+static func hit(k: Dictionary, time := SPIN_TIME) -> bool:
+	if float(k.get("shield_t", 0.0)) > 0.0:
+		k.shield_t = 0.0
+		k.events.append("shield_break")
+		return false
+	if float(k.get("spin_t", 0.0)) > 0.0:
+		return false
+	k.spin_t = time
+	k.drift = false
+	k.boost_t = 0.0
+	k.mini_t = 0.0
+	k.events.append("spin")
+	return true
+
+## 빙글 도는 동안: 조작 안 되고 빠르게 느려진다
+static func _spin_step(k: Dictionary, dt: float) -> void:
+	k.spin_t = maxf(0.0, float(k.spin_t) - dt)
+	k.yaw = wrapf(float(k.yaw) + 10.0 * dt, -PI, PI)
+	k.yaw_rate = 10.0
+	var v: Vector2 = k.vel
+	v = v.move_toward(Vector2.ZERO, 26.0 * dt) * exp(-0.6 * dt)
+	k.vel = v
+	k.pos = (k.pos as Vector2) + v * dt
+	k.slip = 0.0
+	k.steer_s = 0.0
+	if k.spin_t <= 0.0:
+		# 다 돌고 나면 길 방향 그대로 (속도 방향 쪽을 보게)
+		if v.length() > 1.0:
+			k.yaw = atan2(v.x, v.y)
+
+## 컴퓨터가 아이템을 쓸지. ahead/behind = 바로 앞·뒤 카트까지 거리(없으면 INF), straight = 앞이 곧은가
+static func ai_use_item(item: String, place: int, ahead: float, behind: float, straight: bool, threatened: bool, rnd: float) -> bool:
+	match item:
+		"boost": return straight and rnd < 0.05
+		"pinecone": return ahead < 45.0 and rnd < 0.08
+		"bees": return place > 1 and rnd < 0.05
+		"acorn": return behind < 25.0 and rnd < 0.08
+		"shield": return threatened or rnd < 0.004
+		"wind": return place > 2 and rnd < 0.05
+	return false

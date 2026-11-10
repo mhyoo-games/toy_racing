@@ -22,6 +22,8 @@ func _init() -> void:
 	_smooth_feel()
 	_drift_tricks()
 	_gauge_balance()
+	_brake_and_mini()
+	_items()
 	_track_geometry()
 	_race_rules()
 	_shop_and_save()
@@ -242,8 +244,12 @@ func _full_laps() -> void:
 		print("  %s: %.1f초 (한 바퀴 %.1f초) 드리프트 %d 순간부스터 %d 부스터 %d 벽 %d" % [def.id, t, avg, drifts, minis, boosts, walls])
 		ok(dist >= goal, def.id + " 3바퀴를 다 돈다")
 		ok(avg > tr.length / 45.0 and avg < tr.length / 15.0, def.id + " 한 바퀴 시간이 그럴듯하다")
-		ok(drifts > 3 * tr.laps and boosts >= 1, def.id + " 컴퓨터도 드리프트하고 부스터를 쓴다")
-		ok(walls < 60, def.id + " 벽에 자주 안 박는다")
+		var sharpest := 0.0
+		for c in tr.curv:
+			sharpest = maxf(sharpest, absf(c))
+		if sharpest > 0.025:
+			ok(drifts > 3 * tr.laps and boosts >= 1, def.id + " 컴퓨터도 드리프트하고 부스터를 쓴다")
+		ok(walls < 12 * tr.laps, def.id + " 벽에 자주 안 박는다 (%d)" % walls)
 
 ## 온라인 연결 코드: 접두어·압축·base64가 돌아오는지, 망가진 코드는 빈 값
 func _net_codes() -> void:
@@ -411,3 +417,89 @@ func _gauge_balance() -> void:
 	var r1: float = rev.call(false)
 	var r2: float = rev.call(true)
 	ok(r2 > r1 * 1.5, "후진 드리프트는 크게 돈다 (%.2f > %.2f rad)" % [r2, r1])
+
+## 브레이크 드리프트(드리프트 중 ↓), 순간부스터 기회가 펴지기 시작할 때 열리고 살짝 일찍 눌러도 됨
+func _brake_and_mini() -> void:
+	var st := Rules.kart_stats(kart("acorn"))
+	var dt := 1.0 / 60.0
+	var turn := func(brake: bool) -> Array:
+		var k := Rules.new_kart(Vector2.ZERO, 0.0)
+		k.vel = Vector2(0, 28)
+		for i in 60:
+			Rules.step(k, {"throttle": -1.0 if (brake and i > 6) else 1.0, "steer": 1.0, "drift": true}, st, dt)
+		return [absf(wrapf(atan2(k.vel.x, k.vel.y), -PI, PI)), k.vel.length(), k.drift]
+	var a: Array = turn.call(false)
+	var b: Array = turn.call(true)
+	ok(b[0] > a[0] * 1.2 and b[2], "드리프트 중 ↓: 더 크게 돈다 (%.2f > %.2f rad), 드리프트는 이어짐" % [b[0], a[0]])
+	ok(b[1] > 12.0, "브레이크 드리프트는 급브레이크처럼 서지 않는다 (%.1f)" % b[1])
+	# 순간부스터: 카운터를 넣어 펴지기 시작하면 아직 드리프트 중이어도 기회가 열린다
+	var k := Rules.new_kart(Vector2.ZERO, 0.0)
+	k.vel = Vector2(0, 28)
+	for i in 30:
+		Rules.step(k, {"throttle": 1.0, "steer": 1.0, "drift": true}, st, dt)
+	var opened_in_drift := false
+	for i in 12:
+		Rules.step(k, {"throttle": 1.0, "steer": -1.0}, st, dt)
+		if k.window_t > 0.0 and k.drift:
+			opened_in_drift = true
+	ok(opened_in_drift, "펴지기 시작하면 (아직 드리프트 중에도) 순간부스터 기회")
+	# 살짝 일찍(드리프트 중에) ↑를 눌러도 기회가 열리면 쳐 준다
+	var e := Rules.new_kart(Vector2.ZERO, 0.0)
+	e.vel = Vector2(0, 28)
+	for i in 30:
+		Rules.step(e, {"throttle": 1.0, "steer": 1.0, "drift": true}, st, dt)
+	Rules.step(e, {"throttle": 1.0, "steer": 1.0, "drift": true, "accel_tap": true}, st, dt)
+	var got := false
+	for i in 14:
+		Rules.step(e, {"throttle": 1.0, "steer": -1.0}, st, dt)
+		if "mini_boost" in e.events: got = true
+		e.events.clear()
+	ok(got, "살짝 일찍 누른 ↑도 순간부스터")
+	# 너무 일찍 누른 건 안 된다
+	var f := Rules.new_kart(Vector2.ZERO, 0.0)
+	f.vel = Vector2(0, 28)
+	for i in 10:
+		Rules.step(f, {"throttle": 1.0, "steer": 1.0, "drift": true}, st, dt)
+	Rules.step(f, {"throttle": 1.0, "steer": 1.0, "drift": true, "accel_tap": true}, st, dt)
+	for i in 30:
+		Rules.step(f, {"throttle": 1.0, "steer": 1.0, "drift": true}, st, dt)
+	var got2 := false
+	for i in 20:
+		Rules.step(f, {"throttle": 1.0, "steer": -1.0}, st, dt)
+		if "mini_boost" in f.events: got2 = true
+		f.events.clear()
+	ok(not got2, "한참 전에 누른 ↑는 순간부스터가 아니다")
+
+## 아이템전: 순위별 아이템, 칸 두 개, 맞으면 빙글·방패, 빙글 도는 동안 느려지고 조작 안 됨
+func _items() -> void:
+	var count := func(place: int) -> Dictionary:
+		var c := {}
+		for i in 2000:
+			var it := Rules.item_roll(place, 8, (i + 0.5) / 2000.0)
+			c[it] = int(c.get(it, 0)) + 1
+		return c
+	var first: Dictionary = count.call(1)
+	var last: Dictionary = count.call(8)
+	ok(int(first.get("bees", 0)) == 0 and int(first.get("wind", 0)) == 0, "1등은 꿀벌·회오리바람을 안 받는다")
+	ok(int(last.get("boost", 0)) > int(first.get("boost", 0)) and int(last.get("bees", 0)) > 300, "꼴찌는 부스터·꿀벌을 더 받는다")
+	ok(int(first.get("acorn", 0)) + int(first.get("shield", 0)) > int(last.get("acorn", 0)) + int(last.get("shield", 0)), "1등은 지키는 아이템을 더 받는다")
+	for it in Rules.ITEMS:
+		ok(Rules.ITEM_NAMES.has(it), "아이템 이름 " + it)
+	var k := Rules.new_kart(Vector2.ZERO, 0.0)
+	ok(Rules.give_item(k, "boost") and Rules.give_item(k, "acorn") and not Rules.give_item(k, "bees") and k.items.size() == 2, "아이템은 두 칸까지")
+	k.vel = Vector2(0, 30)
+	k.shield_t = 3.0
+	ok(not Rules.hit(k) and k.shield_t == 0.0 and "shield_break" in k.events, "방패는 한 번 막는다")
+	ok(Rules.hit(k) and k.spin_t > 0.0, "맞으면 빙글")
+	var st := Rules.kart_stats(kart("acorn"))
+	var y0: float = k.yaw
+	Rules.step(k, {"throttle": 1.0, "steer": 1.0, "drift": true}, st, 1.0 / 60.0)
+	ok(not k.drift and absf(wrapf(k.yaw - y0, -PI, PI)) > 0.1, "빙글 도는 동안 조작이 안 먹고 돈다")
+	for i in 80:
+		Rules.step(k, {"throttle": 1.0}, st, 1.0 / 60.0)
+	ok(k.spin_t == 0.0 and k.vel.length() < 15.0, "다 돌면 많이 느려져 있다 (%.1f)" % k.vel.length())
+	var g := Rules.new_kart(Vector2.ZERO, 0.0)
+	g.no_gauge = true
+	g.gauge = 1.5
+	Rules.step(g, {}, st, 1.0 / 60.0)
+	ok(g.boosts == 0 and g.gauge == 0.0, "아이템전은 드리프트 게이지로 부스터가 안 생긴다")

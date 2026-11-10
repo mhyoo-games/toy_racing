@@ -13,6 +13,7 @@ var font_bold: Font
 var mode := "race"        # race(컴퓨터와 경주) / time(혼자 연습) / duo(둘이서) / online(친구와 온라인)
 var track_id := "acorn_road"
 var duo_bots := true      # 둘이서 할 때 컴퓨터도 넣을지
+var items := false        # 아이템전 (아니면 스피드전)
 var last_result: Dictionary = {}
 var online_setup: Dictionary = {}   ## 온라인 경주 설정 (방장이 만들어 보냄)
 

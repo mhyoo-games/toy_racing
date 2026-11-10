@@ -9,6 +9,10 @@ var def: Dictionary
 var rng := RandomNumberGenerator.new()
 var _meshes := {}
 
+## 이 점이 땅 위(다리 아님)인가
+func ground(i: int) -> bool:
+	return Rules.height_at(trk, i) <= Rules.BRIDGE_H
+
 func build(track_def: Dictionary, track: Dictionary, shadows := true) -> void:
 	def = track_def
 	trk = track
@@ -17,6 +21,8 @@ func build(track_def: Dictionary, track: Dictionary, shadows := true) -> void:
 	_ground()
 	_road()
 	_curbs()
+	if trk.get("has_bridge", false):
+		_bridges()
 	_start()
 	_fences()
 	_forest()
@@ -119,11 +125,13 @@ func _strip(from: float, to: float, y: float, mat: Material, keep := Callable(),
 		var v0: float = trk.cum[i] / 6.0
 		var v1: float = v0 + (trk.pts[i] as Vector2).distance_to(trk.pts[j]) / 6.0
 		var c: Color = Color.WHITE if not color_of.is_valid() else color_of.call(i)
-		for q in [[a0, 0.0, v0], [b0, 0.0, v1], [a1, 1.0, v0], [a1, 1.0, v0], [b0, 0.0, v1], [b1, 1.0, v1]]:
+		var hi := Rules.height_at(trk, i)
+		var hj := Rules.height_at(trk, j)
+		for q in [[a0, 0.0, v0, hi], [b0, 0.0, v1, hj], [a1, 1.0, v0, hi], [a1, 1.0, v0, hi], [b0, 0.0, v1, hj], [b1, 1.0, v1, hj]]:
 			st.set_color(c)
 			st.set_normal(Vector3.UP)
 			st.set_uv(Vector2(q[1], q[2]))
-			st.add_vertex(Vector3(q[0].x, y, q[0].y))
+			st.add_vertex(Vector3(q[0].x, y + q[3], q[0].y))
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = mat
@@ -142,8 +150,8 @@ func _road() -> void:
 	var dirt := StandardMaterial3D.new()
 	dirt.albedo_color = Color.html(def.get("ground", "#6fae4f")).lerp(Color(0.55, 0.45, 0.3), 0.45)
 	dirt.roughness = 1.0
-	_strip(-hw - 2.2, -hw, 0.012, dirt)
-	_strip(hw, hw + 2.2, 0.012, dirt)
+	_strip(-hw - 2.2, -hw, 0.012, dirt, ground)
+	_strip(hw, hw + 2.2, 0.012, dirt, ground)
 	# 흰 가장자리 선과 가운데 점선
 	var white := KartView.mat(Color(0.97, 0.97, 0.94))
 	_strip(-hw + 0.25, -hw + 0.6, 0.03, white)
@@ -153,6 +161,8 @@ func _road() -> void:
 func _curbs() -> void:
 	var hw: float = trk.half_width
 	var bent := func(i: int) -> bool:
+		if not ground(i):
+			return false
 		for o in range(-3, 4):
 			if absf(trk.curv[(i + o + trk.n) % trk.n]) > 0.012:
 				return true
@@ -282,7 +292,7 @@ func _fences() -> void:
 		while s < trk.length:
 			var i: int = int(s / trk.length * trk.n) % trk.n
 			var p: Vector2 = trk.pts[i] + trk.nrm[i] * side * (trk.wall + 0.3)
-			if clear_of_track(p, -0.1):
+			if ground(i) and Rules.height_at(trk, i) < 0.2 and clear_of_track(p, -0.1):
 				var t: Vector2 = trk.tan[i]
 				xs.append(_xf(p, atan2(t.x, t.y) + PI / 2, 2.4))
 			# 바깥쪽 곡선은 점 사이가 벌어지니 옆 거리만큼 촘촘하게
@@ -294,15 +304,16 @@ func _forest() -> void:
 	var b := bounds().grow(trk.wall + 46.0)
 	var kinds := {"tree": [], "tree-high": [], "rocks-high": [], "rocks-low": [], "plant": [], "stones": [], "patch-grass": []}
 	var cell := 7.0
+	var density: float = {"highway": 0.55, "deep": 1.0, "hills": 0.8}.get(str(def.get("theme", "")), 0.92)
 	var y := b.position.y
 	while y < b.end.y:
 		var x := b.position.x
 		while x < b.end.x:
 			var p := Vector2(x + rng.randf_range(-3, 3), y + rng.randf_range(-3, 3))
 			var loc := Rules.locate(trk, p)
-			var d: float = absf(loc.lat) - trk.wall
+			var d: float = absf(loc.lat) - float(loc.wall)
 			var r := rng.randf()
-			if d > 2.0 and d < 46.0 and r < 0.92 - d * 0.004:
+			if d > 2.0 and d < 46.0 and r < density - d * 0.004:
 				var rot := rng.randf() * TAU
 				var pick := rng.randf()
 				if pick < 0.5:
@@ -354,3 +365,96 @@ func _camp() -> void:
 					_put("platform", Vector3(p.x, 0, p.y), face, 4.0)
 			placed += 1
 		i += 9
+
+## 다리: 옆 벽(두께), 난간, 기둥
+func _bridges() -> void:
+	var hw: float = trk.half_width
+	var m: int = trk.n
+	# 다리 옆면 (도로 가장자리에서 아래로)
+	var side_st := SurfaceTool.new()
+	side_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in m:
+		var j := (i + 1) % m
+		var hi := Rules.height_at(trk, i)
+		var hj := Rules.height_at(trk, j)
+		if hi < 0.3 and hj < 0.3:
+			continue
+		for sd in [-1.0, 1.0]:
+			var a: Vector2 = trk.pts[i] + trk.nrm[i] * sd * (hw + 0.9)
+			var b: Vector2 = trk.pts[j] + trk.nrm[j] * sd * (hw + 0.9)
+			var nrm3 := Vector3(trk.nrm[i].x * sd, 0, trk.nrm[i].y * sd)
+			var quad := [Vector3(a.x, hi + 0.05, a.y), Vector3(b.x, hj + 0.05, b.y), Vector3(a.x, maxf(0.0, hi - 0.9), a.y),
+				Vector3(a.x, maxf(0.0, hi - 0.9), a.y), Vector3(b.x, hj + 0.05, b.y), Vector3(b.x, maxf(0.0, hj - 0.9), b.y)]
+			for v in quad:
+				side_st.set_normal(nrm3)
+				side_st.add_vertex(v)
+	var side_mi := MeshInstance3D.new()
+	side_mi.mesh = side_st.commit()
+	var sm := KartView.mat(Color(0.78, 0.74, 0.68)).duplicate()
+	sm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	side_mi.material_override = sm
+	add_child(side_mi)
+	# 다리 위 길섶 (도로 끝 ~ 난간)
+	var deck := KartView.mat(Color(0.6, 0.58, 0.56))
+	_strip(-hw - 0.9, -hw, 0.015, deck, func(i: int) -> bool: return not ground(i))
+	_strip(hw, hw + 0.9, 0.015, deck, func(i: int) -> bool: return not ground(i))
+	# 난간: 빨강·하양 낮은 벽
+	var rails := {"r": [], "w": []}
+	var posts := []
+	for i in m:
+		var j := (i + 1) % m
+		if ground(i) and ground(j):
+			continue
+		for sd in [-1.0, 1.0]:
+			var a: Vector2 = trk.pts[i] + trk.nrm[i] * sd * (hw + 0.75)
+			var b: Vector2 = trk.pts[j] + trk.nrm[j] * sd * (hw + 0.75)
+			var mid := (a + b) * 0.5
+			var hmid := (Rules.height_at(trk, i) + Rules.height_at(trk, j)) * 0.5
+			var ln := a.distance_to(b)
+			var yaw := atan2(b.x - a.x, b.y - a.y)
+			var xf := Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3(0.3, 0.8, ln + 0.05)), Vector3(mid.x, hmid + 0.4, mid.y))
+			rails["r" if (i / 3) % 2 == 0 else "w"].append(xf)
+			if i % 4 == 0:
+				posts.append(Transform3D(Basis().scaled(Vector3(0.35, 1.2, 0.35)), Vector3(a.x, Rules.height_at(trk, i) + 0.6, a.y)))
+	for key in rails:
+		_boxes(rails[key], Color(0.88, 0.26, 0.22) if key == "r" else Color(0.96, 0.96, 0.92))
+	_boxes(posts, Color(0.35, 0.33, 0.35))
+	# 기둥: 높은 곳 아래. 다른 길 위에는 세우지 않는다
+	var pillars := []
+	for i in range(0, m, 6):
+		var h := Rules.height_at(trk, i)
+		if h < 1.5:
+			continue
+		for sd in [-1.0, 1.0]:
+			var p: Vector2 = trk.pts[i] + trk.nrm[i] * sd * (hw - 1.2)
+			if _over_other_road(p, i):
+				continue
+			pillars.append(Transform3D(Basis().scaled(Vector3(1.1, h - 0.4, 1.1)), Vector3(p.x, (h - 0.4) * 0.5, p.y)))
+	_boxes(pillars, Color(0.72, 0.68, 0.62))
+
+## 다른 구간(번호가 먼) 길 위인가
+func _over_other_road(p: Vector2, i: int) -> bool:
+	var m: int = trk.n
+	for j in range(0, m, 2):
+		var di := absi(j - i)
+		di = mini(di, m - di)
+		if di < 25:
+			continue
+		if (trk.pts[j] as Vector2).distance_to(p) < trk.half_width + 3.0:
+			return true
+	return false
+
+func _boxes(xforms: Array, c: Color) -> void:
+	if xforms.is_empty():
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var bm := BoxMesh.new()
+	bm.material = KartView.mat(c)
+	mm.mesh = bm
+	mm.instance_count = xforms.size()
+	for i in xforms.size():
+		mm.set_instance_transform(i, xforms[i])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	add_child(mmi)

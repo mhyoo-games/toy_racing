@@ -94,45 +94,72 @@ func _pick_mode(m: String) -> void:
 
 func _tracks() -> void:
 	_coins_badge()
-	var titles := {"race": "경주하기 — 컴퓨터 7명과 3바퀴", "time": "혼자 연습 — 기록을 깨면 코인", "duo": "둘이서 — 위아래 화면 나누기"}
-	var v := _column(60, 40)
-	v.add_child(UI.label(titles[Game.mode], 40, Color(1.0, 0.93, 0.6), true))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 22)
-	v.add_child(row)
+	var titles := {"race": "경주하기 — 컴퓨터 7명과", "time": "혼자 연습 — 기록을 깨면 코인", "duo": "둘이서 — 위아래 화면 나누기"}
+	var v := _column(50, 22)
+	v.add_theme_constant_override("separation", 10)
+	v.add_child(UI.label(titles[Game.mode], 34, Color(1.0, 0.93, 0.6), true))
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size = Vector2(1180, 540)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	v.add_child(sc)
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 14)
+	sc.add_child(grid)
+	var first: Button = null
 	for t in Game.tracks:
 		var p := UI.panel()
-		p.custom_minimum_size = Vector2(360, 0)
+		p.custom_minimum_size = Vector2(370, 0)
 		var col := VBoxContainer.new()
-		col.add_theme_constant_override("separation", 8)
+		col.add_theme_constant_override("separation", 4)
 		p.add_child(col)
-		col.add_child(UI.label(t.name, 32, UI.CREAM, true))
-		col.add_child(UI.label("난이도 " + "★".repeat(int(t.level)) + "☆".repeat(3 - int(t.level)), 22, Color(1.0, 0.82, 0.3)))
+		var head := HBoxContainer.new()
+		head.add_child(UI.label(t.name, 25, UI.CREAM, true))
+		var lv := UI.label("  " + "★".repeat(int(t.level)) + "☆".repeat(3 - int(t.level)) + "  %d바퀴" % int(t.laps), 17, Color(1.0, 0.82, 0.3))
+		head.add_child(lv)
+		col.add_child(head)
 		var map := TrackMap.new()
 		map.def = t
-		map.custom_minimum_size = Vector2(300, 190)
+		map.custom_minimum_size = Vector2(320, 96)
 		col.add_child(map)
-		var d := UI.label(t.desc, 19, Color(0.92, 0.95, 0.88))
+		var d := UI.label(t.desc, 15, Color(0.92, 0.95, 0.88))
 		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		d.custom_minimum_size = Vector2(300, 52)
+		d.custom_minimum_size = Vector2(320, 40)
 		col.add_child(d)
-		col.add_child(UI.label("최고 기록 " + Rules.time_text(Game.best_of(t.id)), 20, Color(0.8, 0.9, 1.0)))
-		col.add_child(UI.button("달리기", func(): _go(t.id), 300))
-		row.add_child(p)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		row.add_child(UI.label("기록 " + Rules.time_text(Game.best_of(t.id)), 16, Color(0.8, 0.9, 1.0)))
+		var go := UI.button("달리기", func(): _go(t.id), 130, 20)
+		go.custom_minimum_size.y = 42
+		row.add_child(go)
+		col.add_child(row)
+		if first == null:
+			first = go
+		grid.add_child(p)
 	var bottom := HBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 16)
 	v.add_child(bottom)
-	bottom.add_child(UI.button("← 뒤로", func(): show_screen("title"), 200))
+	bottom.add_child(UI.button("← 뒤로", func(): show_screen("title"), 180))
+	if Game.mode in ["race", "duo"]:
+		var ib := UI.button("", func(): pass, 300)
+		var upd2 := func(): ib.text = "경기 방식: " + ("아이템전" if Game.items else "스피드전")
+		upd2.call()
+		ib.pressed.connect(func():
+			Game.items = not Game.items
+			upd2.call())
+		bottom.add_child(ib)
 	if Game.mode == "duo":
-		var b := UI.button("", func(): pass, 360)
+		var b := UI.button("", func(): pass, 300)
 		var upd := func(): b.text = "컴퓨터도 같이: " + ("함께" if Game.duo_bots else "둘만")
 		upd.call()
 		b.pressed.connect(func():
 			Game.duo_bots = not Game.duo_bots
 			upd.call())
 		bottom.add_child(b)
-		bottom.add_child(UI.button("카트 고르기", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 220))
-	_focus_first(row)
+		bottom.add_child(UI.button("카트 고르기", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 200))
+	if first:
+		first.call_deferred("grab_focus")
 
 func _go(id: String) -> void:
 	Game.track_id = id
@@ -282,14 +309,16 @@ func _help() -> void:
 		["드리프트", "굽이에서 방향키 + Shift. 손을 떼면 천천히, 반대로 꺾으면 빨리 펴진다. 미끄러지는 만큼 게이지가 차고, 가득 차면 부스터 +1 (두 개까지)"],
 		["끌기", "Shift를 누른 채로도 방향키가 먹는다. 미는 쪽은 더 돌고, 반대쪽은 코를 되돌린다. 계속 반대로 누르면 반대쪽 드리프트로 이어진다(S자)"],
 		["톡톡이", "드리프트 중에 Shift를 다시 톡톡 치면 살짝 더 돌고 게이지가 덤으로 찬다. 길게 끄는 것보다 빨리 찬다"],
-		["순간부스터", "드리프트가 끝나는 순간(‘지금 ↑!’) ↑를 다시 누르면 짧게 빨라진다"],
+		["순간부스터", "드리프트가 펴지기 시작할 때(‘지금 ↑!’) ↑를 다시 누르면 짧게 빨라진다. 살짝 일찍 눌러도 된다"],
 		["출발 부스터", "출발 신호가 ‘1’에서 꺼지기 직전에 ↑를 누르고 있으면 빨리 튀어 나간다"],
 		["인코스·아웃코스", "굽이 안쪽을 스치면 길이 짧다. 바깥에서 들어가 안쪽을 찍고 다시 바깥으로"],
 		["끊어 타기", "Shift를 짧게 끊어 치면 속도를 거의 안 잃고 방향만 꺾인다. 굽이마다 끊어 치며 안쪽을 파고들자"],
 		["커팅", "직선에서 Shift + 방향키를 좌우로 톡톡, 반대 방향키로 바로 세우며 앞으로 달리면서 게이지를 모은다"],
 		["게이지", "부스터 중에 드리프트하면 1.5배로 찬다. 카트마다 드리프트 능력이 달라, 비싼 카트일수록 잘 찬다"],
+		["브레이크 드리프트", "드리프트 중에 ↓를 누르면 급브레이크 대신 더 크게 돈다. 머리핀(U자) 굽이에서"],
 		["후진 드리프트", "뒤로 가면서 Shift + 방향키. 뒤가 미끄러지며 크게 돌아 벽에서 빨리 돌려 나온다"],
 		["부스터 지름길", "잔디는 느리지만 부스터를 쓰면 덜 느리다. 굽이 안쪽 잔디를 부스터로 가로지르자"],
+		["아이템전", "길 위 ? 상자를 지나면 아이템(두 칸). 부스터 키로 쓴다: 부스터·솔방울(앞으로 던짐)·도토리 함정(뒤에 둠)·꿀벌 떼(바로 앞 카트를 쫓음)·잎사귀 방패·회오리바람(앞 카트 모두 빙글)"],
 		["멈춤", "Esc 또는 P"],
 	]
 	var grid := GridContainer.new()

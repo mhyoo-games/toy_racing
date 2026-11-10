@@ -217,6 +217,23 @@ def buy():
     return seq(coin(), tone(0.08, note_hz('G6'), kind='sq', vol=0.25), tone(0.3, note_hz('C7'), kind='sq', vol=0.25, r=0.25))
 
 
+def item():
+    return seq(*[tone(0.05, note_hz(n), kind='pul', vol=0.28, r=0.03) for n in ['C6', 'E6', 'G6', 'C7']])
+
+
+def throw():
+    return mix(noise(0.3, 0.6, 0.35, 21, 0.01, 0.2), tone(0.3, 300, 900, 'tri', 0.2, 0.01, 0.2))
+
+
+def hit():
+    return seq(mix(noise(0.12, 0.8, 0.2, 23, 0.002, 0.1, decay=12), tone(0.12, 220, 110, 'sq', 0.35, 0.002, 0.08)),
+               tone(0.5, 700, 180, 'tri', 0.25, 0.01, 0.3))
+
+
+def shield():
+    return mix(tone(0.45, 880, 1320, 'sin', 0.25, 0.01, 0.3), tone(0.45, 1320, 1760, 'sin', 0.15, 0.05, 0.3))
+
+
 def nope():
     return seq(tone(0.1, 220, kind='sq', vol=0.3), tone(0.2, 165, kind='sq', vol=0.3, r=0.1))
 
@@ -295,14 +312,119 @@ def race_music():
     return render(150, 8, chords, mel, drums=True, lead='pul')
 
 
+def parse_mel(text):
+    """'E5:.5 -:1 G5:1/3' → [(음 또는 None, 박)]"""
+    out = []
+    for tok in text.split():
+        n, d = tok.split(':')
+        if '/' in d:
+            x, y = d.split('/')
+            b = float(x or 1) / float(y)
+        else:
+            b = float(d)
+        out.append((None if n == '-' else n, b))
+    return out
+
+
+def song(bpm, sections, lead='pul', lead_vol=0.17, bass_vol=0.3, seed=1):
+    """구역마다 {bars, melody, chords(마디마다 'E2 E3 G3 B3'), drums(16칸: k 큰북, K 큰북+심벌, s 작은북, h 하이햇), arp, pump}
+    pump=True면 베이스가 8분으로 근음·옥타브를 번갈아 친다(달리는 느낌)."""
+    beat = 60.0 / bpm
+    total_beats = sum(sec['bars'] * 4 for sec in sections)
+    total = int(total_beats * beat * SR) + SR
+    out = [0.0] * total
+    rnd = random.Random(seed)
+
+    def add(start_beat, part, gain=1.0):
+        s0 = int(start_beat * beat * SR)
+        for i, x in enumerate(part):
+            j = s0 + i
+            if j < total:
+                out[j] += x * gain
+
+    pos = 0.0
+    for sec in sections:
+        bars = sec['bars']
+        chords = [c.split() for c in sec['chords']]
+        for b in range(bars):
+            ch = chords[b % len(chords)]
+            root = note_hz(ch[0])
+            bar0 = pos + b * 4
+            # 베이스
+            if sec.get('pump', True):
+                for e in range(8):
+                    f = root * (2 if e % 2 else 1)
+                    add(bar0 + e * 0.5, tone(beat * 0.42, f, kind='sq' if e % 2 else 'tri', vol=bass_vol * (0.55 if e % 2 else 1.0), r=0.02))
+            else:
+                for e in range(4):
+                    add(bar0 + e, tone(beat * 0.9, root, kind='tri', vol=bass_vol, r=0.05))
+            # 화음 (뒷박 짧게)
+            ups = [note_hz(n) for n in ch[1:]]
+            for e in range(4):
+                for f in ups:
+                    add(bar0 + e + 0.5, tone(beat * 0.22, f, kind='sq', vol=0.035, r=0.03))
+            # 아르페지오 (16분)
+            if sec.get('arp'):
+                tones = ups + [u * 2 for u in ups]
+                for q in range(16):
+                    add(bar0 + q * 0.25, tone(beat * 0.2, tones[q % len(tones)] * 2, kind='pul', vol=0.045, r=0.02))
+            # 북 (16칸)
+            pat = sec.get('drums', '')
+            for q, c in enumerate(pat[:16]):
+                t = bar0 + q * 0.25
+                if c in 'kK':
+                    add(t, tone(0.11, 150, 42, 'sin', 0.55, 0.001, 0.07))
+                if c == 'K':
+                    add(t, noise(0.5, 0.2, 0.9, rnd.randint(0, 9999), 0.001, 0.4, decay=5))
+                if c == 's':
+                    add(t, mix(noise(0.13, 0.38, 0.75, rnd.randint(0, 9999), 0.001, 0.09, decay=18), tone(0.08, 190, 150, 'tri', 0.18, 0.001, 0.06)))
+                if c in 'hks.' and q % 2 == 0:
+                    add(t, noise(0.025, 0.05, 0.95, rnd.randint(0, 9999), 0.001, 0.02))
+                if c == 'h':
+                    add(t, noise(0.04, 0.09, 0.95, rnd.randint(0, 9999), 0.001, 0.03))
+        # 멜로디
+        t = pos
+        for n, d in parse_mel(sec['melody']):
+            if n:
+                add(t, tone(d * beat * 0.9, note_hz(n), kind=lead, vol=lead_vol, a=0.006, r=0.03))
+                # 살짝 늦은 메아리
+                add(t + 0.75, tone(d * beat * 0.8, note_hz(n), kind=lead, vol=lead_vol * 0.22, a=0.006, r=0.03))
+            t += d
+        pos += bars * 4
+    return out[: int(total_beats * beat * SR)]
+
+
+def rush_music():
+    """긴박한 경주 곡: E단조 8비트 록, 176 BPM (새로 지은 곡)"""
+    E, C, D, B, A, G = 'E2 E4 G4 B4', 'C3 C4 E4 G4', 'D3 D4 F#4 A4', 'B2 B3 D#4 F#4', 'A2 A3 C4 E4', 'G2 G3 B3 D4'
+    secs = [
+        {'bars': 4, 'chords': [E, E, C, D], 'drums': 'k.k.s.k.k.k.s.ss', 'pump': True,
+         'melody': 'E5:.5 E5:.5 -:.5 E5:.5 -:.5 E5:.5 G5:.5 A5:.5 B5:1 -:1 B5:.5 A5:.5 G5:.5 F#5:.5 G5:.5 -:.5 G5:.5 E5:.5 C6:1 B5:1 A5:.5 B5:.5 A5:.5 G5:.5 F#5:1 D5:1'},
+        {'bars': 8, 'chords': [E, C, D, B, E, C, A, B], 'drums': 'k.h.s.h.k.k.s.h.',
+         'melody': 'E5:.5 B4:.5 E5:.5 G5:.5 F#5:.5 E5:.5 D5:.5 E5:.5 C5:.5 E5:.5 G5:.5 E5:.5 A5:1 G5:1 D5:.5 F#5:.5 A5:.5 F#5:.5 B5:1 A5:1 F#5:.5 D#5:.5 B4:.5 D#5:.5 F#5:2 '
+                   'E5:.5 B4:.5 E5:.5 G5:.5 B5:.5 A5:.5 G5:.5 F#5:.5 G5:.5 E5:.5 C5:.5 E5:.5 G5:1 A5:1 A5:.5 C6:.5 B5:.5 A5:.5 E5:1 C5:1 B4:.5 D#5:.5 F#5:.5 A5:.5 B5:2'},
+        {'bars': 8, 'chords': [A, B, C, D, A, B, C, D], 'drums': 'k.h.s.hkk.h.s.hs',
+         'melody': 'A5:1 E5:.5 A5:.5 C6:1 B5:1 B5:1 F#5:.5 B5:.5 D#6:1 B5:1 C6:.5 B5:.5 A5:.5 G5:.5 E5:1 G5:1 F#5:.5 G5:.5 A5:.5 B5:.5 D6:2 '
+                   'A5:.25 A5:.25 C6:.5 A5:.5 E5:.5 A5:1 B5:1 B5:.25 B5:.25 D#6:.5 B5:.5 F#5:.5 B5:1 A5:1 G5:.5 A5:.5 B5:.5 C6:.5 D6:1 E6:1 F#6:2 D#6:2'},
+        {'bars': 8, 'chords': [E, C, G, D, E, C, B, B], 'drums': 'kshskshskshsKshs', 'arp': True,
+         'melody': 'E6:1 B5:.5 G5:.5 E6:1 D6:1 C6:1 G5:.5 E5:.5 C6:1 B5:1 B5:1 G5:.5 D5:.5 B5:1 A5:.5 G5:.5 A5:1 F#5:.5 D5:.5 A5:2 '
+                   'E6:1 B5:.5 G5:.5 E6:1 F#6:1 G6:1 E6:.5 C6:.5 G5:1 C6:1 B5:.5 C6:.5 B5:.5 A5:.5 F#5:1 D#5:1 B5:2 F#5:1 D#5:1'},
+        {'bars': 8, 'chords': [E, C, G, D, E, C, B, E], 'drums': 'kshskshskshsKshs', 'arp': True,
+         'melody': 'E6:1 B5:.5 G5:.5 E6:1 D6:1 C6:1 G5:.5 E5:.5 C6:1 B5:1 B5:1 G5:.5 D5:.5 B5:1 A5:.5 G5:.5 A5:1 F#5:.5 D5:.5 A5:2 '
+                   'E6:1 B5:.5 G5:.5 E6:1 F#6:1 G6:1 E6:.5 C6:.5 G5:1 C6:1 B5:.5 C6:.5 B5:.5 A5:.5 F#5:1 D#5:1 E6:2 B5:1 G5:1'},
+    ]
+    return song(176, secs, lead='pul', seed=4)
+
+
 def main():
     sfx = {'engine': engine, 'skid': skid, 'screech': screech, 'boost': boost, 'mini': mini, 'gain': gain, 'beep': beep, 'go': go,
-           'coin': coin, 'bump': bump, 'lap': lap, 'finish': finish, 'click': click, 'tick': tick, 'buy': buy, 'nope': nope}
+           'coin': coin, 'bump': bump, 'lap': lap, 'finish': finish, 'click': click, 'tick': tick, 'buy': buy, 'nope': nope, 'item': item, 'throw': throw, 'hit': hit, 'shield': shield}
     for name, fn in sfx.items():
         write(os.path.join(ROOT, 'sfx', name + '.wav'), fn())
     write(os.path.join(ROOT, 'music', 'title.wav'), title_music(), norm=0.7)
     write(os.path.join(ROOT, 'music', 'race.wav'), race_music(), norm=0.7)
-    print('소리 %d개 + 곡 2개' % len(sfx))
+    write(os.path.join(ROOT, 'music', 'rush.wav'), rush_music(), norm=0.72)
+    print('소리 %d개 + 곡 3개' % len(sfx))
 
 
 if __name__ == '__main__':

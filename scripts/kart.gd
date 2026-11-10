@@ -12,6 +12,7 @@ var smoke: Array[CPUParticles3D] = []
 var sparks: Array[CPUParticles3D] = []
 var fire: CPUParticles3D
 var driver: Node3D
+var bubble: MeshInstance3D
 var wheel_spin := 0.0
 var roll := 0.0
 var bounce := 0.0
@@ -162,6 +163,19 @@ func setup(def: Dictionary, with_driver := true, driver_tint := Color.WHITE) -> 
 		s.position = Vector3(sx * kwid * 0.5, 0.1, -klen * 0.38)
 		add_child(s)
 		sparks.append(s)
+	bubble = MeshInstance3D.new()
+	var bs := SphereMesh.new()
+	bs.radius = klen * 0.85
+	bs.height = klen * 1.4
+	bubble.mesh = bs
+	var bmat := StandardMaterial3D.new()
+	bmat.albedo_color = Color(0.45, 1.0, 0.55, 0.28)
+	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bubble.material_override = bmat
+	bubble.position.y = 0.7
+	bubble.visible = false
+	add_child(bubble)
 	fire = _particles(Color(1.0, 0.55, 0.15, 0.9), 0.25, 0.4, true)
 	fire.position = Vector3(0, 0.52, -klen * 0.55)
 	fire.direction = Vector3(0, 0.2, -1)
@@ -221,8 +235,9 @@ func _particles(c: Color, size: float, life: float, glow := false) -> CPUParticl
 ## 주행 상태를 그림에 옮긴다
 func show_state(k: Dictionary, steer: float, dt: float) -> void:
 	var p: Vector2 = k.pos
-	position = Vector3(p.x, 0.0, p.y)
+	position = Vector3(p.x, float(k.get("h", 0.0)), p.y)
 	rotation.y = k.yaw
+	rotation.x = -float(k.get("pitch", 0.0))
 	var spd := Rules.speed_of(k)
 	wheel_spin += spd / 0.3 * dt
 	for w in wheels:
@@ -238,6 +253,7 @@ func show_state(k: Dictionary, steer: float, dt: float) -> void:
 	bounce += dt * (6.0 + spd * 0.3)
 	body.rotation.z = roll
 	body.position.y = sin(bounce) * 0.012 * clampf(spd / 10.0, 0.0, 1.0) + (0.03 if k.offroad else 0.0) * sin(bounce * 3.7)
+	bubble.visible = float(k.get("shield_t", 0.0)) > 0.0
 	var boost := Rules.boosting(k)
 	for i in flames.size():
 		flames[i].visible = boost

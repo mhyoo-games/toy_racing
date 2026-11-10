@@ -63,6 +63,10 @@ func _draw() -> void:
 	var kmh := int(absf(Rules.speed_of(k)) * Rules.KMH)
 	_txt("%d" % kmh, Vector2(w - 250 * u, h - 40 * u), int(64 * u), Color(1, 0.6, 0.25) if Rules.boosting(k) else Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, 150 * u)
 	_txt("km/h", Vector2(w - 92 * u, h - 44 * u), int(22 * u), Color(0.9, 0.9, 0.9))
+	if race.items_on:
+		_items_ui(u, k)
+		_rest(u, k, w, h, place, total)
+		return
 	# 드리프트 게이지와 부스터 칸
 	var gw := 300.0 * u
 	var gh := 22.0 * u
@@ -82,6 +86,27 @@ func _draw() -> void:
 			draw_rect(r.grow(-4 * u), Color(1.0, 0.45, 0.2))
 			_txt("B", Vector2(bx + 12 * u, gy + 14 * u), int(26 * u), Color(1, 0.95, 0.75))
 	_txt("드리프트", Vector2(gx, gy - 8 * u), int(18 * u), Color(0.85, 0.92, 1.0), HORIZONTAL_ALIGNMENT_LEFT, -1.0, false)
+	_rest(u, k, w, h, place, total)
+
+const SHORT := {"boost": "부스터", "pinecone": "솔방울", "acorn": "도토리", "bees": "꿀벌", "shield": "방패", "wind": "바람"}
+const ITEM_COLORS := {"boost": Color(1.0, 0.5, 0.2), "pinecone": Color(0.6, 0.4, 0.25), "acorn": Color(0.75, 0.5, 0.25), "bees": Color(1.0, 0.85, 0.2), "shield": Color(0.4, 0.85, 0.45), "wind": Color(0.7, 0.9, 1.0)}
+
+func _items_ui(u: float, k: Dictionary) -> void:
+	var its: Array = k.get("items", [])
+	for i in Rules.MAX_ITEMS:
+		var big := i == 0
+		var sz := (86.0 if big else 60.0) * u
+		var x := size.x * 0.5 - 50.0 * u + (0.0 if big else 96.0 * u)
+		var y := size.y - sz - 26.0 * u
+		var r := Rect2(x, y, sz, sz)
+		draw_rect(r, Color(0.08, 0.06, 0.1, 0.75))
+		if i < its.size():
+			draw_rect(r.grow(-4 * u), ITEM_COLORS.get(its[i], Color.WHITE))
+			_txt(SHORT.get(its[i], "?"), Vector2(x, y + sz * 0.62), int((22 if big else 15) * u), Color(0.1, 0.07, 0.05), HORIZONTAL_ALIGNMENT_CENTER, sz, true)
+	if float(k.get("shield_t", 0.0)) > 0.0:
+		_txt("방패 %.0f" % ceil(float(k.shield_t)), Vector2(size.x * 0.5 - 200 * u, size.y - 40 * u), int(22 * u), Color(0.5, 1.0, 0.6))
+
+func _rest(u: float, k: Dictionary, w: float, h: float, place: int, total: int) -> void:
 	# 순간부스터 기회 표시
 	if float(k.window_t) > 0.0:
 		var a := float(k.window_t) / Rules.MINI_WINDOW

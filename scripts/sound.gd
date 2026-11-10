@@ -1,7 +1,7 @@
 extends Node
 ## 효과음·엔진·끌리는 소리·배경음 (자동 로드 Sound). 소리 파일은 tools/sound/gen.py 가 만든다.
 
-const NAMES := ["screech", "boost", "mini", "gain", "beep", "go", "coin", "bump", "lap", "finish", "click", "tick", "buy", "nope"]
+const NAMES := ["item", "throw", "hit", "shield", "screech", "boost", "mini", "gain", "beep", "go", "coin", "bump", "lap", "finish", "click", "tick", "buy", "nope"]
 
 var sfx := {}
 var pool: Array[AudioStreamPlayer] = []
@@ -30,7 +30,7 @@ func _looped(path: String) -> AudioStreamWAV:
 	var s: AudioStreamWAV = (load(path) as AudioStreamWAV).duplicate()
 	s.loop_mode = AudioStreamWAV.LOOP_FORWARD
 	s.loop_begin = 0
-	s.loop_end = s.data.size() / 2
+	s.loop_end = int(s.get_length() * s.mix_rate)   # 압축(QOA)이면 data 크기가 길이와 다르다
 	return s
 
 func _loop(path: String, db: float) -> AudioStreamPlayer:
