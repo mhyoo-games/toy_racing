@@ -412,7 +412,7 @@ func _bridges() -> void:
 			var hmid := (Rules.height_at(trk, i) + Rules.height_at(trk, j)) * 0.5
 			var ln := a.distance_to(b)
 			var yaw := atan2(b.x - a.x, b.y - a.y)
-			var xf := Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3(0.3, 0.8, ln + 0.05)), Vector3(mid.x, hmid + 0.4, mid.y))
+			var xf := Transform3D(Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(0.3, 0.8, ln + 0.05)), Vector3(mid.x, hmid + 0.4, mid.y))
 			rails["r" if (i / 3) % 2 == 0 else "w"].append(xf)
 			if i % 4 == 0:
 				posts.append(Transform3D(Basis().scaled(Vector3(0.35, 1.2, 0.35)), Vector3(a.x, Rules.height_at(trk, i) + 0.6, a.y)))
