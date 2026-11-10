@@ -10,10 +10,11 @@ var font: Font
 var font_bold: Font
 
 ## 다음 경주 설정
-var mode := "race"        # race(컴퓨터와 경주) / time(혼자 연습) / duo(둘이서)
+var mode := "race"        # race(컴퓨터와 경주) / time(혼자 연습) / duo(둘이서) / online(친구와 온라인)
 var track_id := "acorn_road"
 var duo_bots := true      # 둘이서 할 때 컴퓨터도 넣을지
 var last_result: Dictionary = {}
+var online_setup: Dictionary = {}   ## 온라인 경주 설정 (방장이 만들어 보냄)
 
 func _ready() -> void:
 	karts = JSON.parse_string(FileAccess.get_file_as_string("res://data/karts.json")).karts
@@ -69,6 +70,8 @@ func choose(id: String, who := 1) -> void:
 	if id in save.owned:
 		save["kart" if who == 1 else "kart2"] = id
 		write_save()
+		if who == 1 and Net.connected():
+			Net.send({"y": "me", "kart": id, "name": "방장" if Net.role == "host" else "친구"})
 
 func best_of(track: String) -> float:
 	return float(save.best.get(track, -1.0))

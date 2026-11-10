@@ -23,6 +23,7 @@ func _init() -> void:
 	_race_rules()
 	_shop_and_save()
 	_full_laps()
+	_net_codes()
 	print("통과 %d, 실패 %d" % [passes, fails])
 	quit(1 if fails > 0 else 0)
 
@@ -239,3 +240,12 @@ func _full_laps() -> void:
 		ok(avg > tr.length / 45.0 and avg < tr.length / 15.0, def.id + " 한 바퀴 시간이 그럴듯하다")
 		ok(drifts > 3 * tr.laps and boosts >= 1, def.id + " 컴퓨터도 드리프트하고 부스터를 쓴다")
 		ok(walls < 60, def.id + " 벽에 자주 안 박는다")
+
+## 온라인 연결 코드: 접두어·압축·base64가 돌아오는지, 망가진 코드는 빈 값
+func _net_codes() -> void:
+	var sdp := "v=0\r\no=- 46117 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n" + "a=candidate:1 1 udp 2122260223 192.168.0.2 5000 typ host\r\n".repeat(6)
+	var code: String = Rules.net_encode({"t": "offer", "s": sdp}, [["0", 0, "candidate:1 1 udp 1 10.0.0.1 9 typ host"]])
+	ok(code.begins_with("TR1-") and code.length() < sdp.length(), "코드는 줄여서 TR1- 로 시작 (%d자)" % code.length())
+	var d: Dictionary = Rules.net_decode("  보낸 글: " + code.insert(30, "\n") + "  ")
+	ok(d.get("t") == "offer" and d.get("s") == sdp and d.c.size() == 1, "앞뒤 글자·줄바꿈이 섞여도 읽는다")
+	ok(Rules.net_decode("TR1-망가짐").is_empty() and Rules.net_decode("").is_empty() and Rules.net_decode(code.substr(0, 40)).is_empty(), "망가진 코드는 빈 값")

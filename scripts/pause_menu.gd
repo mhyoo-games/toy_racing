@@ -5,7 +5,7 @@ var race: Node
 var box: VBoxContainer
 
 func _ready() -> void:
-	process_mode = Node.PROCESS_MODE_WHEN_PAUSED
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	visible = false
 	var bg := ColorRect.new()
@@ -22,15 +22,17 @@ func _ready() -> void:
 	t.add_theme_font_size_override("font_size", 48)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(t)
-	for pair in [["계속 달리기", _resume], ["처음부터 다시", _restart], ["그만두기", _quit]]:
+	var items := [["계속 달리기", _resume], ["그만두기", _quit]] if race.online else [["계속 달리기", _resume], ["처음부터 다시", _restart], ["그만두기", _quit]]
+	for pair in items:
 		var b := UI.button(pair[0], pair[1], 320)
 		box.add_child(b)
 	box.position = -box.get_combined_minimum_size() * 0.5
 
 func open() -> void:
 	visible = true
-	get_tree().paused = true
-	Sound.pause_loops(true)
+	if not race.online:   # 온라인은 친구 화면이 계속 달리므로 멈추지 않는다
+		get_tree().paused = true
+		Sound.pause_loops(true)
 	box.position = -box.get_combined_minimum_size() * 0.5
 	(box.get_child(1) as Button).grab_focus()
 

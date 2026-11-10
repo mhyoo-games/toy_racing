@@ -480,3 +480,42 @@ static func time_text(t: float) -> String:
 	var m := int(t / 60.0)
 	var sec := t - m * 60.0
 	return "%d:%05.2f" % [m, sec]
+
+# ────────────────────────── 온라인 연결 코드 ──────────────────────────
+
+const NET_PREFIX := "TR1-"
+
+## 코드 = 접두어 + base64(압축(JSON))
+static func net_encode(desc: Dictionary, cands: Array) -> String:
+	var raw := JSON.stringify({"t": desc.t, "s": desc.s, "c": cands}).to_utf8_buffer()
+	return NET_PREFIX + Marshalls.raw_to_base64(raw.compress(FileAccess.COMPRESSION_DEFLATE))
+
+static func net_decode(code: String) -> Dictionary:
+	var s := code.strip_edges().replace("\n", "").replace("\r", "").replace(" ", "")
+	var at := s.find(NET_PREFIX)
+	if at < 0:
+		return {}
+	s = s.substr(at + NET_PREFIX.length())
+	# base64 글자만 남긴다 (메신저가 덧붙인 글자 버리기)
+	var only := ""
+	for ch in s:
+		if (ch >= "A" and ch <= "Z") or (ch >= "a" and ch <= "z") or (ch >= "0" and ch <= "9") or ch in ["+", "/", "="]:
+			only += ch
+		else:
+			break
+	s = only
+	if s.length() < 16 or s.length() % 4 != 0:
+		return {}
+	var bytes := Marshalls.base64_to_raw(s)
+	if bytes.is_empty():
+		return {}
+	var raw := bytes.decompress_dynamic(1 << 20, FileAccess.COMPRESSION_DEFLATE)
+	if raw.is_empty():
+		return {}
+	var j := JSON.new()
+	if j.parse(raw.get_string_from_utf8()) != OK or typeof(j.data) != TYPE_DICTIONARY:
+		return {}
+	var d: Dictionary = j.data
+	if not (d.has("t") and d.has("s") and d.has("c")) or typeof(d.c) != TYPE_ARRAY:
+		return {}
+	return d

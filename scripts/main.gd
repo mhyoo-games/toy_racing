@@ -13,6 +13,15 @@ var layer: CanvasLayer
 func _ready() -> void:
 	add_to_group("main")
 	open_menu("title")
+	Net.message.connect(_on_net)
+
+## 친구(방장)가 출발을 누르면 바로 경주로
+func _on_net(m: Dictionary) -> void:
+	if m.get("y") == "go" and Net.role == "guest" and typeof(m.get("setup")) == TYPE_DICTIONARY:
+		Game.online_setup = m.setup
+		Game.mode = "online"
+		Game.track_id = str(m.setup.track)
+		start_race()
 
 func _clear() -> void:
 	for n in [race, bg, layer]:
@@ -42,5 +51,5 @@ func start_race() -> void:
 	race.done.connect(func(result: Dictionary):
 		Game.finish_race(result)
 		open_menu("results"))
-	race.quit_race.connect(func(): open_menu("tracks"))
+	race.quit_race.connect(func(): open_menu("online" if Game.mode == "online" else "tracks"))
 	add_child(race)

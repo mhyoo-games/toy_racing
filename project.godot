@@ -15,6 +15,7 @@ boot_splash/show_image=false
 
 Game="*res://scripts/game.gd"
 Sound="*res://scripts/sound.gd"
+Net="*res://scripts/net.gd"
 Dev="*res://scripts/dev.gd"
 
 [display]

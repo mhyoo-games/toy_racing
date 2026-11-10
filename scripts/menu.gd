@@ -20,6 +20,7 @@ func show_screen(s: String) -> void:
 	match s:
 		"title": _title()
 		"tracks": _tracks()
+		"online": _online()
 		"garage": _garage()
 		"results": _results()
 		"help": _help()
@@ -59,16 +60,18 @@ func _focus_first(v: Control) -> void:
 
 func _title() -> void:
 	_coins_badge()
-	var v := _column(70, 60)
-	var t := UI.label("토이 레이싱", 84, Color(1.0, 0.93, 0.6), true)
+	var v := _column(70, 34)
+	v.add_theme_constant_override("separation", 9)
+	var t := UI.label("토이 레이싱", 80, Color(1.0, 0.93, 0.6), true)
 	v.add_child(t)
 	v.add_child(UI.label("숲속 장난감 카트 경주", 26, UI.CREAM))
 	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(0, 18)
+	gap.custom_minimum_size = Vector2(0, 8)
 	v.add_child(gap)
 	v.add_child(UI.button("경주하기", func(): _pick_mode("race"), 340))
 	v.add_child(UI.button("혼자 연습 (기록 도전)", func(): _pick_mode("time"), 340))
 	v.add_child(UI.button("둘이서 (화면 나누기)", func(): _pick_mode("duo"), 340))
+	v.add_child(UI.button("친구와 온라인 (코드로 연결)", func(): Game.mode = "online"; show_screen("online"), 340))
 	v.add_child(UI.button("차고 · 카트 상점", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 340))
 	v.add_child(UI.button("조작 방법", func(): show_screen("help"), 340))
 	var snd := UI.button("소리: " + ("끔" if Sound.muted else "켬"), func(): pass, 340)
@@ -151,7 +154,7 @@ func _garage() -> void:
 	var first: Button = null
 	for k in Game.karts:
 		var owned: bool = k.id in Game.save.owned
-		var tag := ("  ✓ 타는 중" if k.id == cur else ("  가짐" if owned else "  ● %d" % int(k.price)))
+		var tag := ("  ★ 타는 중" if k.id == cur else ("  가짐" if owned else "  ● %d" % int(k.price)))
 		var b := UI.button(k.name + tag, func(): garage_pick = k.id; show_screen("garage"), 330, 22)
 		b.custom_minimum_size.y = 48
 		if k.id == garage_pick:
@@ -209,7 +212,7 @@ func _garage() -> void:
 	var bottom := HBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 14)
 	v.add_child(bottom)
-	bottom.add_child(UI.button("← 뒤로", func(): show_screen("tracks" if Game.mode == "duo" else "title"), 160))
+	bottom.add_child(UI.button("← 뒤로", func(): show_screen({"duo": "tracks", "online": "online"}.get(Game.mode, "title")), 160))
 	if Game.mode == "duo":
 		bottom.add_child(UI.button("1P", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 80))
 		bottom.add_child(UI.button("2P", func(): garage_who = 2; garage_pick = ""; show_screen("garage"), 80))
@@ -250,7 +253,10 @@ func _results() -> void:
 	var row2 := HBoxContainer.new()
 	row2.add_theme_constant_override("separation", 14)
 	v.add_child(row2)
-	row2.add_child(UI.button("다시 달리기", func(): get_tree().get_first_node_in_group("main").start_race(), 240))
+	if r.mode == "online":
+		row2.add_child(UI.button("대기실로", func(): show_screen("online"), 240))
+	else:
+		row2.add_child(UI.button("다시 달리기", func(): get_tree().get_first_node_in_group("main").start_race(), 240))
 	row2.add_child(UI.button("다른 트랙", func(): show_screen("tracks"), 200))
 	row2.add_child(UI.button("차고", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 140))
 	row2.add_child(UI.button("처음 화면", func(): show_screen("title"), 180))
@@ -293,6 +299,145 @@ func _help() -> void:
 	back.call_deferred("grab_focus")
 
 func _unhandled_input(e: InputEvent) -> void:
-	if e.is_action_pressed("ui_cancel") and screen != "title":
+	if e.is_action_pressed("ui_cancel") and screen != "title" and screen != "online":
 		show_screen("title" if screen != "garage" or Game.mode != "duo" else "tracks")
 		get_viewport().set_input_as_handled()
+
+# ───────── 친구와 온라인
+
+var _box_in: CodeBox
+var _online_track := ""
+var _online_bots := true
+
+func _ready_online() -> void:
+	if not Net.changed.is_connected(_net_changed):
+		Net.changed.connect(_net_changed)
+
+func _net_changed() -> void:
+	if screen == "online" and is_inside_tree():
+		show_screen("online")
+
+func _online() -> void:
+	_ready_online()
+	_coins_badge()
+	var v := _column(60, 34)
+	v.add_theme_constant_override("separation", 12)
+	v.add_child(UI.label("친구와 온라인", 44, Color(1.0, 0.93, 0.6), true))
+	var p := UI.panel()
+	p.custom_minimum_size = Vector2(900, 0)
+	v.add_child(p)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 10)
+	p.add_child(col)
+	var say := func(t: String, c := UI.CREAM, size := 22) -> Label:
+		var l := UI.label(t, size, c)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size = Vector2(840, 0)
+		col.add_child(l)
+		return l
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	var add_box := func(readonly: bool, ph: String) -> CodeBox:
+		var b := CodeBox.new()
+		b.readonly = readonly
+		b.placeholder = ph
+		b.custom_minimum_size = Vector2(840, 120)
+		col.add_child(b)
+		return b
+	var st := Net.status
+	if Net.error_text != "":
+		say.call(Net.error_text, Color(1.0, 0.6, 0.5))
+	if st in ["idle", "error", "closed"] and Net.role == "":
+		say.call("서버 없이 브라우저끼리 바로 연결해요. 한 사람이 방을 만들고 초대 코드를 메신저로 보내면, 친구가 답장 코드를 돌려보내요.")
+		if st == "closed":
+			say.call("친구와 연결이 끊겼어요.", Color(1.0, 0.6, 0.5))
+		row.add_child(UI.button("방 만들기", func(): Net.host(), 260))
+		row.add_child(UI.button("방 들어가기", func(): Net.role = "join"; show_screen("online"), 260))
+		col.add_child(row)
+	elif Net.role == "join":
+		say.call("① 친구에게 받은 초대 코드를 아래에 붙여 넣으세요.")
+		_box_in = add_box.call(false, "TR1- 로 시작하는 초대 코드")
+		row.add_child(UI.button("붙여넣기", func(): _box_in.paste(), 180))
+		row.add_child(UI.button("확인", func():
+			if not Net.join(_box_in.get_text()):
+				Net.role = "join"
+				show_screen("online"), 180))
+		col.add_child(row)
+	elif st == "making":
+		say.call("연결 코드를 만드는 중이에요…")
+	elif st == "code" and Net.role == "host":
+		say.call("① 이 초대 코드를 복사해서 친구에게 보내세요.")
+		var mine: CodeBox = add_box.call(true, "")
+		mine.custom_minimum_size.y = 90
+		mine.set_text(Net.my_code)
+		var r1 := HBoxContainer.new()
+		r1.add_child(UI.button("초대 코드 복사", func(): mine.copy(), 260))
+		col.add_child(r1)
+		say.call("② 친구가 보낸 답장 코드를 붙여 넣고 ‘연결’을 누르세요.")
+		_box_in = add_box.call(false, "TR1- 로 시작하는 답장 코드")
+		_box_in.custom_minimum_size.y = 90
+		row.add_child(UI.button("붙여넣기", func(): _box_in.paste(), 180))
+		row.add_child(UI.button("연결", func(): Net.accept(_box_in.get_text()), 180))
+		col.add_child(row)
+	elif st == "connecting" and Net.role == "guest" and Net.my_code != "":
+		say.call("② 이 답장 코드를 복사해서 방장에게 보내세요. 방장이 넣으면 연결돼요.")
+		var mine2: CodeBox = add_box.call(true, "")
+		mine2.set_text(Net.my_code)
+		row.add_child(UI.button("답장 코드 복사", func(): mine2.copy(), 260))
+		col.add_child(row)
+		say.call("연결을 기다리는 중…", Color(0.8, 0.9, 1.0))
+	elif st == "connecting":
+		say.call("연결하는 중이에요…")
+	elif st == "connected":
+		say.call("연결됐어요!", Color(0.6, 1.0, 0.6), 30)
+		var theirs := str(Net.peer.get("kart", ""))
+		say.call("내 카트: %s   ·   친구 카트: %s" % [Game.kart_def(Game.save.kart).name, Game.kart_def(theirs).name if theirs != "" else "…"])
+		if Net.role == "host":
+			if _online_track == "":
+				_online_track = Game.tracks[0].id
+			say.call("트랙을 고르고 ‘출발’을 누르세요.")
+			var tr_row := HBoxContainer.new()
+			tr_row.add_theme_constant_override("separation", 10)
+			for t in Game.tracks:
+				var b := UI.button(("★ " if t.id == _online_track else "") + t.name, func(): _online_track = t.id; show_screen("online"), 270, 22)
+				tr_row.add_child(b)
+			col.add_child(tr_row)
+			var bots := UI.button("컴퓨터도 같이: " + ("함께" if _online_bots else "둘만"), func(): _online_bots = not _online_bots; show_screen("online"), 300, 22)
+			row.add_child(bots)
+			row.add_child(UI.button("출발!", _online_go, 200))
+			col.add_child(row)
+		else:
+			say.call("방장이 트랙을 고르고 출발하면 바로 시작해요.", Color(0.8, 0.9, 1.0))
+	var bottom := HBoxContainer.new()
+	bottom.add_theme_constant_override("separation", 14)
+	v.add_child(bottom)
+	bottom.add_child(UI.button("← 처음 화면", func():
+		if Net.status != "connected":
+			Net.reset()
+		show_screen("title"), 220))
+	if st == "connected":
+		bottom.add_child(UI.button("카트 바꾸기", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 220))
+	if Net.role != "":
+		bottom.add_child(UI.button("연결 끊고 처음부터", func(): Net.reset(); show_screen("online"), 280))
+	if not OS.has_feature("web") and not Net.available():
+		say.call("(PC판에서는 온라인 연결이 안 돼요. 웹에서 해 주세요.)", Color(1.0, 0.7, 0.5), 18)
+	_focus_first(col)
+
+func _online_go() -> void:
+	var r := RandomNumberGenerator.new()
+	r.randomize()
+	var def := Game.track_def(_online_track)
+	var setup := {
+		"track": _online_track, "host_kart": Game.save.kart, "guest_kart": str(Net.peer.get("kart", "acorn")),
+		"ai": bake_ai(6 if _online_bots else 0, int(def.level), r),
+	}
+	if not (setup.guest_kart in Game.kart_ids()):
+		setup.guest_kart = "acorn"
+	Game.online_setup = setup
+	Game.mode = "online"
+	Game.track_id = _online_track
+	Net.send({"y": "go", "setup": setup})
+	get_tree().get_first_node_in_group("main").start_race()
+
+func bake_ai(n: int, level: int, r: RandomNumberGenerator) -> Array:
+	return preload("res://scripts/race.gd").make_ai_specs(n, level, r)

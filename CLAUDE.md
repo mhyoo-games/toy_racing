@@ -17,6 +17,7 @@
 - 저장은 `user://toy_racing_save.json` 하나 (`Rules.parse_save`가 망가진 값도 받아 준다).
 - Godot 4.6은 Variant에서 `:=`로 타입을 추론하면 오류다. 딕셔너리 값은 `var x: float = d.y`처럼 타입을 적는다. `Node`의 `tr()`과 이름이 겹치므로 트랙 변수는 `trk`.
 - CanvasLayer 아래 Control은 창의 theme을 못 물려받는다 → 기본 글꼴은 `project.godot`의 `gui/theme/custom_font`(갈무리)로. 오른쪽 붙이기는 `set_anchors_preset` 뒤 offset을 직접 준다.
+- 온라인(`scripts/net.gd`, 자동 로드 Net): WebRTC + 코드 복사(초대/답장, `Rules.net_encode/decode` = `TR1-` + base64(압축 JSON)). 채널 ctl(확실: me·go·fin·bye), st(빠름: 위치 `s`). 방장이 컴퓨터를 몰고 `host_order` 순서로 보내며, 받는 쪽 카트는 `remote` = 보간만. 온라인에서는 멈춤이 게임을 멈추지 않는다. 코드 상자(`scripts/code_box.gd`)는 웹에서 진짜 HTML textarea. 웹에서만 된다(PC판은 WebRTC 확장 없음).
 - CI(`ci.yml`): 소리 재생성 확인 → 테스트 → 켜지는지 → 경주가 도는지(`--dev=time`) → 웹 내보내기 → Pages 배포.
 - 게임을 크게 바꾸면 조직 첫 화면(mhyoo-games.github.io `games.json`)과 이력서 저장소(minhyuk94.github.io)의 `games` 카드도 ko/ja/en으로 맞춘다. 소스 코드·저장소 링크는 이력서에 넣지 않는다.
 
@@ -26,3 +27,4 @@
 - 테스트: `godot --headless --import` 후 `godot --headless -s tests/run_tests.gd`
 - 화면 확인: `xvfb-run -a -s "-screen 0 1280x720x24" godot --rendering-driver opengl3 --audio-driver Dummy -- --dev=<장면> --out=/tmp/x [--track=<id>]` (`scripts/dev.gd`, 장면: title, tracks, garage, help, race, duo, time, results). 경주 장면은 사람 카트도 컴퓨터가 몬다.
 - 웹 확인: `godot --headless --export-release "Web" build/web/index.html` 후 로컬 http 서버 + Playwright(`/opt/npm-tools`) + `/usr/bin/google-chrome` (`--use-angle=swiftshader`).
+- 온라인 확인: 같은 브라우저에서 페이지 두 개(context 둘)를 열어 textarea(`#trcode1`, `#trcode2`) 값을 서로 넣으면 실제로 연결된다(외부 STUN 없이도 같은 기계라 됨). 3D 두 개라 매우 느리다.
