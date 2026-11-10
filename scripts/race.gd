@@ -368,6 +368,8 @@ func _events(r: Dictionary) -> void:
 		match e:
 			"drift_start", "drift_flip":
 				Sound.play("screech", -3.0 if humans.size() == 1 else -7.0, randf_range(0.95, 1.06))
+			"drift_tap":
+				Sound.play("screech", -9.0 if humans.size() == 1 else -12.0, randf_range(1.08, 1.18))
 			"mini_boost":
 				hud.say("순간부스터!", Color(0.5, 1.0, 0.6))
 				Sound.play("mini")

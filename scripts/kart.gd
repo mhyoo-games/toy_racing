@@ -245,7 +245,7 @@ func show_state(k: Dictionary, steer: float, dt: float) -> void:
 			var s := 0.8 + 0.35 * sin(bounce * 9.0 + i)
 			flames[i].scale = Vector3(1, (1.4 if k.boost_t > 0.0 else 0.8) * s, 1)
 	fire.emitting = boost
-	var sliding: bool = k.drift and spd > 8.0
+	var sliding: bool = (k.drift and spd > 8.0) or (absf(float(k.slip)) > 0.25 and (k.vel as Vector2).length() > 4.0)
 	for s in smoke:
 		s.emitting = sliding or (k.offroad and spd > 12.0)
 	for s in sparks:

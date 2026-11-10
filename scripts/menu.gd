@@ -281,11 +281,14 @@ func _help() -> void:
 		["휴대폰", "◀ ▶ 핸들, 드리프트·부스터·브레이크 버튼 (가속은 저절로)"],
 		["드리프트", "굽이에서 방향키 + Shift. 손을 떼면 천천히, 반대로 꺾으면 빨리 펴진다. 미끄러지는 만큼 게이지가 차고, 가득 차면 부스터 +1 (두 개까지)"],
 		["끌기", "Shift를 누른 채로도 방향키가 먹는다. 미는 쪽은 더 돌고, 반대쪽은 코를 되돌린다. 계속 반대로 누르면 반대쪽 드리프트로 이어진다(S자)"],
+		["톡톡이", "드리프트 중에 Shift를 다시 톡톡 치면 살짝 더 돌고 게이지가 덤으로 찬다. 길게 끄는 것보다 빨리 찬다"],
 		["순간부스터", "드리프트가 끝나는 순간(‘지금 ↑!’) ↑를 다시 누르면 짧게 빨라진다"],
 		["출발 부스터", "출발 신호가 ‘1’에서 꺼지기 직전에 ↑를 누르고 있으면 빨리 튀어 나간다"],
 		["인코스·아웃코스", "굽이 안쪽을 스치면 길이 짧다. 바깥에서 들어가 안쪽을 찍고 다시 바깥으로"],
-		["톡톡이", "Shift를 짧게 톡톡 끊어 치면 속도를 거의 안 잃고 방향만 꺾인다. 굽이마다 끊어 치며 안쪽을 파고들자"],
+		["끊어 타기", "Shift를 짧게 끊어 치면 속도를 거의 안 잃고 방향만 꺾인다. 굽이마다 끊어 치며 안쪽을 파고들자"],
 		["커팅", "직선에서 Shift + 방향키를 좌우로 톡톡, 반대 방향키로 바로 세우며 앞으로 달리면서 게이지를 모은다"],
+		["게이지", "부스터 중에 드리프트하면 1.5배로 찬다. 카트마다 드리프트 능력이 달라, 비싼 카트일수록 잘 찬다"],
+		["후진 드리프트", "뒤로 가면서 Shift + 방향키. 뒤가 미끄러지며 크게 돌아 벽에서 빨리 돌려 나온다"],
 		["부스터 지름길", "잔디는 느리지만 부스터를 쓰면 덜 느리다. 굽이 안쪽 잔디를 부스터로 가로지르자"],
 		["멈춤", "Esc 또는 P"],
 	]
@@ -355,21 +358,50 @@ func _online() -> void:
 	if Net.error_text != "":
 		say.call(Net.error_text, Color(1.0, 0.6, 0.5))
 	if st in ["idle", "error", "closed"] and Net.role == "":
-		say.call("서버 없이 브라우저끼리 바로 연결해요. 한 사람이 방을 만들고 초대 코드를 메신저로 보내면, 친구가 답장 코드를 돌려보내요.")
+		say.call("방장이 방을 만들면 6자리 방 코드가 나와요. 친구에게 그 코드만 알려 주면 돼요. (연결 정보는 공개 중계 ntfy.sh를 거쳐 자동으로 주고받아요)")
 		if st == "closed":
 			say.call("친구와 연결이 끊겼어요.", Color(1.0, 0.6, 0.5))
-		row.add_child(UI.button("방 만들기", func(): Net.host(), 260))
-		row.add_child(UI.button("방 들어가기", func(): Net.role = "join"; show_screen("online"), 260))
+		row.add_child(UI.button("방 만들기", func(): Net.host_room(), 260))
+		row.add_child(UI.button("방 들어가기", func(): Net.error_text = ""; Net.role = "join"; show_screen("online"), 260))
 		col.add_child(row)
+		var r2 := HBoxContainer.new()
+		r2.add_theme_constant_override("separation", 12)
+		r2.add_child(UI.button("긴 코드로 방 만들기", func(): Net.host(), 300, 20))
+		r2.add_child(UI.button("긴 코드로 들어가기", func(): Net.error_text = ""; Net.role = "longjoin"; show_screen("online"), 300, 20))
+		say.call("방 코드가 안 될 때(막힌 네트워크)는 긴 코드를 메신저로 주고받아 연결할 수 있어요.", Color(0.8, 0.85, 0.8), 18)
+		col.add_child(r2)
 	elif Net.role == "join":
-		say.call("① 친구에게 받은 초대 코드를 아래에 붙여 넣으세요.")
+		say.call("방장에게 받은 6자리 방 코드를 넣으세요.")
+		_box_in = add_box.call(false, "예: K7MP2Q")
+		_box_in.custom_minimum_size = Vector2(320, 64)
+		row.add_child(UI.button("붙여넣기", func(): _box_in.paste(), 180))
+		row.add_child(UI.button("들어가기", func(): Net.join_room(_box_in.get_text()), 200))
+		col.add_child(row)
+		_box_in.call_deferred("focus")
+	elif Net.role == "longjoin":
+		say.call("① 친구에게 받은 긴 초대 코드를 아래에 붙여 넣으세요.")
 		_box_in = add_box.call(false, "TR1- 로 시작하는 초대 코드")
 		row.add_child(UI.button("붙여넣기", func(): _box_in.paste(), 180))
 		row.add_child(UI.button("확인", func():
 			if not Net.join(_box_in.get_text()):
-				Net.role = "join"
+				Net.role = "longjoin"
 				show_screen("online"), 180))
 		col.add_child(row)
+	elif st == "room" and Net.role == "host":
+		say.call("친구에게 이 방 코드를 알려 주세요. 친구가 넣으면 저절로 연결돼요.")
+		var big := UI.label(Net.room, 84, Color(1.0, 0.9, 0.4), true)
+		col.add_child(big)
+		var copybox: CodeBox = add_box.call(true, "")
+		copybox.custom_minimum_size = Vector2(1, 1)
+		copybox.modulate.a = 0.0
+		copybox.set_text(Net.room)
+		row.add_child(UI.button("방 코드 복사", func(): copybox.copy(), 240))
+		col.add_child(row)
+		say.call("친구를 기다리는 중…", Color(0.8, 0.9, 1.0))
+	elif st == "finding":
+		say.call("방 %s 을(를) 찾는 중이에요…" % Net.room)
+	elif st == "connecting" and Net.mode == "room":
+		say.call("방장에게 연결하는 중이에요…")
 	elif st == "making":
 		say.call("연결 코드를 만드는 중이에요…")
 	elif st == "code" and Net.role == "host":

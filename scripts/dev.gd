@@ -69,6 +69,9 @@ func _run() -> void:
 			Game.save.coins = 900
 			main().menu.show_screen("garage"); await wait(0.5); await shot("garage")
 			main().menu.garage_pick = "pinwheel"; main().menu.show_screen("garage"); await wait(0.5); await shot("garage2")
+		"online":
+			Game.mode = "online"
+			main().menu.show_screen("online"); await wait(0.5); await shot("online")
 		"help":
 			main().menu.show_screen("help"); await wait(0.4); await shot("help")
 		"race":

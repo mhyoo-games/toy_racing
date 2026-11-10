@@ -21,11 +21,13 @@ func _init() -> void:
 	_drift_and_boost()
 	_smooth_feel()
 	_drift_tricks()
+	_gauge_balance()
 	_track_geometry()
 	_race_rules()
 	_shop_and_save()
 	_full_laps()
 	_net_codes()
+	_room_codes()
 	print("통과 %d, 실패 %d" % [passes, fails])
 	quit(1 if fails > 0 else 0)
 
@@ -309,7 +311,7 @@ func _drift_tricks() -> void:
 	k.vel = Vector2(0, 28)
 	for i in 90:
 		Rules.step(k, {"throttle": 1.0, "steer": 1.0, "drift": true}, st, dt)
-	ok(k.drift and k.gauge > 0.5, "끌기: 1.5초 끌면 게이지 반 넘게 (%.2f)" % k.gauge)
+	ok(k.drift and k.gauge > 0.4, "끌기: 1.5초 끌면 게이지가 많이 찬다 (%.2f)" % k.gauge)
 	# 누른 채 반대로 꺾으면 코가 돌아오고(드리프트는 이어짐), 더 누르면 반대쪽 드리프트로
 	var slip_before := absf(k.slip)
 	for i in 15:
@@ -350,3 +352,62 @@ func _drift_tricks() -> void:
 	ok(gained > 0.6, "커팅: 직선에서 톡톡 쳐서 게이지를 모은다 (%.2f)" % gained)
 	ok(worst < 0.35, "커팅해도 거의 앞으로 간다 (%.2f rad)" % worst)
 	ok(c.pos.y > plain.pos.y * 0.93, "커팅해도 거리를 크게 안 잃는다 (%.0f / %.0f)" % [c.pos.y, plain.pos.y])
+
+## 방 코드: 6자리, 헷갈리는 글자 없음, 사람이 친 것 다듬기, 중계 글 고르기
+func _room_codes() -> void:
+	var r := RandomNumberGenerator.new()
+	r.seed = 3
+	var seen := {}
+	for i in 200:
+		var c: String = Rules.room_new(r)
+		seen[c] = true
+		if c.length() != 6 or c.contains("0") or c.contains("O") or c.contains("1") or c.contains("I") or c.contains("L"):
+			ok(false, "방 코드 글자 " + c)
+	ok(seen.size() > 195, "방 코드가 겹치지 않는다")
+	ok(Rules.room_clean(" k7mp-2q ") == "K7MP2Q" and Rules.room_clean("K7MP2") == "" and Rules.room_clean("K7MP2QX") == "", "방 코드 다듬기")
+	var body := '{"id":"a","event":"open"}\n{"id":"b","event":"message","message":"O:TR1-first"}\n{"id":"c","event":"message","message":"A:TR1-ans"}\n{"id":"d","event":"message","message":"O:TR1-second"}\n'
+	ok(Rules.relay_pick(body, "O:") == "TR1-second" and Rules.relay_pick(body, "A:") == "TR1-ans" and Rules.relay_pick("", "O:") == "", "중계 글에서 마지막 초대·답장 고르기")
+
+## 게이지 밸런스: 톡톡이가 그냥 길게 끄는 것보다 빨리, 부스터 중엔 더 빨리, 비싼 카트일수록 잘 찬다. 후진 드리프트
+func _gauge_balance() -> void:
+	var dt := 1.0 / 60.0
+	var run := func(st: Dictionary, tap: bool, boost: bool) -> float:
+		var k := Rules.new_kart(Vector2.ZERO, 0.0)
+		k.vel = Vector2(0, 28)
+		for i in 90:
+			if boost:
+				k.boost_t = 1.0
+			var key := fmod(i * dt, 0.25) < 0.07 if tap else true
+			Rules.step(k, {"throttle": 1.0, "steer": 1.0, "drift": key}, st, dt)
+		return k.gauge + k.boosts
+	var st := Rules.kart_stats(kart("acorn"))
+	var long: float = run.call(st, false, false)
+	var tap: float = run.call(st, true, false)
+	var boosted: float = run.call(st, false, true)
+	print("  게이지 1.5초: 끌기 %.2f, 톡톡이 %.2f, 부스터 중 끌기 %.2f" % [long, tap, boosted])
+	ok(tap > long * 1.2, "톡톡이가 길게 끄는 것보다 빨리 찬다 (%.2f > %.2f)" % [tap, long])
+	ok(boosted > long * 1.3, "부스터 중 드리프트는 더 잘 찬다 (%.2f > %.2f)" % [boosted, long])
+	# 연타로 덤을 끝없이 받지는 못한다 (한 프레임마다 눌렀다 떼도 덤은 쉬는 시간마다 한 번)
+	var spam := Rules.new_kart(Vector2.ZERO, 0.0)
+	spam.vel = Vector2(0, 28)
+	for i in 90:
+		Rules.step(spam, {"throttle": 1.0, "steer": 1.0, "drift": i % 2 == 0}, st, dt)
+	ok(spam.gauge + spam.boosts < tap * 1.35, "연타해도 덤은 한도가 있다 (%.2f)" % (spam.gauge + spam.boosts))
+	# 카트별: 처음 카트가 가장 적게, 비싼 카트일수록 잘 찬다 (두 배쯤 차이)
+	var gains := []
+	for k in karts:
+		gains.append(Rules.kart_stats(k).drift_gain)
+	ok(gains[0] == gains.min(), "처음 카트가 드리프트 게이지가 가장 느리다")
+	ok(gains.max() > gains[0] * 1.8, "가장 좋은 카트는 처음 카트의 거의 두 배 (%.2f / %.2f)" % [gains.max(), gains[0]])
+	ok(Rules.kart_stats(kart("firefly")).drift_gain >= Rules.kart_stats(kart("pinwheel")).drift_gain, "최고급 카트도 잘 찬다")
+	# 후진 드리프트: 뒤로 가며 드리프트 키 + 방향키 → 그냥 후진 핸들보다 크게 돈다
+	var rev := func(drift: bool) -> float:
+		var k := Rules.new_kart(Vector2.ZERO, 0.0)
+		k.vel = Vector2(0, -8.5)
+		var y0: float = k.yaw
+		for i in 40:
+			Rules.step(k, {"throttle": -1.0, "steer": 1.0, "drift": drift}, st, dt)
+		return absf(wrapf(k.yaw - y0, -PI, PI))
+	var r1: float = rev.call(false)
+	var r2: float = rev.call(true)
+	ok(r2 > r1 * 1.5, "후진 드리프트는 크게 돈다 (%.2f > %.2f rad)" % [r2, r1])

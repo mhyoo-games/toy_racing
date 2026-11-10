@@ -1,7 +1,8 @@
 extends Node
-## 온라인 둘이서 (자동 로드 Net): 브라우저끼리 WebRTC로 바로 잇는다. 서버 없음.
-## 방장: host() → 초대 코드 → 친구에게 보냄 → 친구의 답장 코드를 accept()
-## 친구: join(초대 코드) → 답장 코드 → 방장에게 보냄 → 연결
+## 온라인 둘이서 (자동 로드 Net): 브라우저끼리 WebRTC로 바로 잇는다. 게임 서버 없음.
+## 방 코드(기본): host_room() → 6자리 방 코드를 친구에게 알려 줌 / 친구: join_room(방 코드)
+##   긴 연결 정보(초대·답장)는 공개 메시지 중계(ntfy.sh)의 "toyracing-방코드" 주제로 자동으로 주고받는다.
+## 긴 코드(예비): host() → 초대 코드 → 친구 join(초대 코드) → 답장 코드 → 방장 accept()
 ## 채널 둘: ctl(순서·확실, 출발·결과), st(빠름·잃어도 됨, 카트 위치)
 
 signal changed            ## status가 바뀜
@@ -22,8 +23,130 @@ var _cands: Array = []
 var _gather := -1.0
 var _since := 0.0
 
+var mode := "room"        ## room(6자리 방 코드) / long(긴 코드 복사)
+var room := ""            ## 방 코드
+var relay := "https://ntfy.sh/"
+var _post: HTTPRequest
+var _poll: HTTPRequest
+var _poll_t := -1.0
+var _poll_busy := false
+var _tries := 0
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	# 웹에서는 HTTPRequest의 timeout이 다 끝난 요청에도 한 번 더 '시간 초과'를 보내므로 쓰지 않고 직접 잰다
+	_post = HTTPRequest.new()
+	add_child(_post)
+	_poll = HTTPRequest.new()
+	add_child(_poll)
+	_post.request_completed.connect(_on_posted)
+	_poll.request_completed.connect(_on_polled)
+	if OS.has_feature("web"):
+		# 시험용: 주소에 ?relay=http://localhost:8770/ 이면 그 중계를 쓴다
+		var r: Variant = JavaScriptBridge.eval("new URLSearchParams(location.search).get('relay')||''", true)
+		if str(r) != "":
+			relay = str(r) if str(r).ends_with("/") else str(r) + "/"
+
+func _topic() -> String:
+	return relay + "toyracing-" + room
+
+## 방 만들기 (6자리 방 코드)
+func host_room() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	host()
+	mode = "room"
+	room = Rules.room_new(rng)
+
+## 방 들어가기 (6자리 방 코드)
+func join_room(text: String) -> void:
+	var r := Rules.room_clean(text)
+	reset()
+	mode = "room"
+	if r == "":
+		error_text = "방 코드는 %d자리예요. 다시 확인해 주세요." % Rules.ROOM_LEN
+		role = "join"
+		_status("idle")
+		return
+	room = r
+	role = "finding"
+	_tries = 0
+	_poll_t = 0.01
+	_status("finding")
+
+func _send_relay(body: String) -> void:
+	_post.cancel_request()
+	var err := _post.request(_topic(), ["Content-Type: text/plain"], HTTPClient.METHOD_POST, body)
+	if err != OK:
+		_relay_fail()
+	else:
+		_post_wait = 12.0
+
+var _post_wait := -1.0
+var _poll_wait := -1.0
+
+func _on_posted(result: int, code: int, _h: PackedStringArray, _b: PackedByteArray) -> void:
+	if _post_wait < 0.0:
+		return          # 이미 끝난 요청의 두 번째 알림
+	_post_wait = -1.0
+	if result != HTTPRequest.RESULT_SUCCESS or code >= 300:
+		_relay_fail()
+
+func _on_poll_timeout() -> void:
+	_poll_busy = false
+	_tries += 1
+	if _tries > 3:
+		_relay_fail()
+	else:
+		_poll_t = 2.0
+
+func _relay_fail() -> void:
+	error_text = "방 코드 연결 정보를 주고받지 못했어요. 네트워크가 막혀 있을 수 있어요. ‘긴 코드로 연결’을 써 보세요."
+	_poll_t = -1.0
+	_status("error")
+
+func _poll_now() -> void:
+	if _poll_busy:
+		return
+	_poll_busy = true
+	if _poll.request(_topic() + "/json?poll=1&since=all") != OK:
+		_poll_busy = false
+		_relay_fail()
+	else:
+		_poll_wait = 12.0
+
+func _on_polled(result: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
+	if _poll_wait < 0.0:
+		return          # 이미 끝난 요청의 두 번째 알림
+	_poll_wait = -1.0
+	_poll_busy = false
+	if result != HTTPRequest.RESULT_SUCCESS or code >= 300:
+		_tries += 1
+		if _tries > 3:
+			_relay_fail()
+		else:
+			_poll_t = 2.0
+		return
+	var text := body.get_string_from_utf8()
+	if role == "host" and status == "room":
+		var ans := Rules.relay_pick(text, "A:")
+		if ans != "" and accept(ans):
+			_poll_t = -1.0
+			return
+		_poll_t = 1.5
+	elif role == "finding":
+		var offer := Rules.relay_pick(text, "O:")
+		if offer != "":
+			_poll_t = -1.0
+			join(offer)
+			return
+		_tries += 1
+		if _tries > 6:
+			error_text = "그 방 코드로 만든 방을 찾지 못했어요. 방장 화면의 코드를 다시 확인해 주세요."
+			role = "join"
+			_status("idle")
+		else:
+			_poll_t = 1.5
 
 ## 이 환경에서 WebRTC를 쓸 수 있나 (웹에서는 늘, PC판은 확장이 있어야)
 func available() -> bool:
@@ -52,6 +175,14 @@ func reset() -> void:
 	_cands = []
 	_gather = -1.0
 	error_text = ""
+	room = ""
+	_poll_t = -1.0
+	_poll_busy = false
+	_post_wait = -1.0
+	_poll_wait = -1.0
+	if _post:
+		_post.cancel_request()
+		_poll.cancel_request()
 	_status("idle")
 
 func _new_pc() -> bool:
@@ -78,6 +209,7 @@ func host() -> void:
 	role = "host"
 	if not _new_pc():
 		return
+	mode = "long"
 	_status("making")
 	pc.create_offer()
 
@@ -88,7 +220,11 @@ func join(code: String) -> bool:
 		error_text = "초대 코드가 아니에요. 처음부터 끝까지 다 붙여 넣었는지 확인해 주세요."
 		changed.emit()
 		return false
+	var keep_room := room
+	var keep_mode := mode
 	reset()
+	room = keep_room
+	mode = keep_mode
 	role = "guest"
 	if not _new_pc():
 		return false
@@ -114,6 +250,23 @@ func accept(code: String) -> bool:
 	return true
 
 func _process(dt: float) -> void:
+	# 중계 요청이 너무 오래 걸리면 끊고 실패로
+	if _post_wait > 0.0:
+		_post_wait -= dt
+		if _post_wait <= 0.0:
+			_post_wait = -1.0
+			_post.cancel_request()
+			_relay_fail()
+	if _poll_wait > 0.0:
+		_poll_wait -= dt
+		if _poll_wait <= 0.0:
+			_poll_wait = -1.0
+			_poll.cancel_request()
+			_on_poll_timeout()
+	if _poll_t > 0.0:
+		_poll_t -= dt
+		if _poll_t <= 0.0:
+			_poll_now()
 	if pc == null:
 		return
 	pc.poll()
@@ -123,7 +276,17 @@ func _process(dt: float) -> void:
 		if (_gather <= 0.0 or _since > 6.0) and not _desc.is_empty() and my_code == "":
 			_gather = -1.0
 			my_code = Rules.net_encode(_desc, _cands)
-			_status("code" if role == "host" else "connecting")
+			if mode == "room" and room != "":
+				# 방 코드 방식: 긴 정보는 중계로 보내고, 방장은 답장을 기다린다
+				_send_relay(("O:" if role == "host" else "A:") + my_code)
+				if role == "host":
+					_tries = 0
+					_poll_t = 2.0
+					_status("room")
+				else:
+					_status("connecting")
+			else:
+				_status("code" if role == "host" else "connecting")
 	if ctl and ctl.get_ready_state() == WebRTCDataChannel.STATE_OPEN and status != "connected":
 		_status("connected")
 		send({"y": "me", "kart": Game.save.kart, "name": "방장" if role == "host" else "친구"})

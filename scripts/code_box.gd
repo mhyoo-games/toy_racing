@@ -48,8 +48,8 @@ func _process(_dt: float) -> void:
 	var vp := get_viewport().get_visible_rect().size
 	var r := get_global_rect()
 	var vis := is_visible_in_tree()
-	JavaScriptBridge.eval("var e=document.getElementById('%s'); if(e){e.style.left='%.3f%%';e.style.top='%.3f%%';e.style.width='%.3f%%';e.style.height='%.3f%%';e.style.display='%s';}" % [
-		dom_id, r.position.x / vp.x * 100.0, r.position.y / vp.y * 100.0, r.size.x / vp.x * 100.0, r.size.y / vp.y * 100.0, "block" if vis else "none"], true)
+	JavaScriptBridge.eval("var e=document.getElementById('%s'); if(e){e.style.left='%.3f%%';e.style.top='%.3f%%';e.style.width='%.3f%%';e.style.height='%.3f%%';e.style.display='%s';e.style.opacity='%.2f';}" % [
+		dom_id, r.position.x / vp.x * 100.0, r.position.y / vp.y * 100.0, r.size.x / vp.x * 100.0, r.size.y / vp.y * 100.0, "block" if vis else "none", modulate.a], true)
 
 func set_text(t: String) -> void:
 	_text = t

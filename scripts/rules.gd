@@ -13,6 +13,12 @@ const DRIFT_MIN_SPEED := 9.0
 const STEER_IN := 5.5            ## 핸들이 꺾이는 빠르기 (1/초, 끝까지 약 0.18초)
 const STEER_OUT := 9.0           ## 핸들을 놓을 때 돌아오는 빠르기
 const STEER_DRIFT := 11.0        ## 드리프트 중 핸들 빠르기
+const TAP_BONUS := 0.9           ## 드리프트를 막 건 순간의 게이지 덤 (짧게 여러 번 = 톡톡이·커팅이 빨리 참)
+const TAP_TIME := 0.35           ## 그 덤이 줄어드는 시간
+const BOOST_GAUGE := 1.5         ## 부스터 중 드리프트하면 게이지 배율
+const TAP_CHUNK := 0.14          ## 드리프트를 걸 때·톡 칠 때마다 얹어 주는 게이지 (× 카트 드리프트 능력)
+const TAP_COOLDOWN := 0.18       ## 덤은 이 시간에 한 번까지 (연타 막기)
+const TAP_KICK := 0.5            ## 톡 칠 때 더 도는 회전 속도
 const DRIFT_GRIP := 5.0          ## 드리프트 중 가는 방향이 코를 따라가는 빠르기 (낮을수록 많이 미끄러짐)
 const RECOVER_TIME := 0.42       ## 드리프트가 끝난 뒤 접지가 다 돌아오는 시간 (그동안 속도를 거의 안 잃음 = 톡톡이)
 
@@ -27,7 +33,7 @@ static func kart_stats(def: Dictionary) -> Dictionary:
 		"accel": 13.0 + g.call("accel") * 1.7,          # 14.7 ~ 30
 		"turn": 1.55 + g.call("handling") * 0.11,       # 초당 회전(라디안)
 		"grip": 14.0 + g.call("handling") * 0.9,        # 보통 때 가는 방향이 코를 따라가는 빠르기
-		"drift_gain": 0.30 + g.call("drift") * 0.045,   # 드리프트 게이지가 차는 빠르기
+		"drift_gain": 0.16 + g.call("drift") * 0.055,   # 드리프트 게이지가 차는 빠르기 (능력치 3 → 0.33, 9 → 0.66: 두 배)
 		"boost_time": 1.7 + g.call("boost") * 0.09,     # 부스터 길이(초)
 		"boost_mult": 1.34,
 		"weight": g.call("weight"),
@@ -40,7 +46,7 @@ static func new_kart(pos: Vector2, yaw: float) -> Dictionary:
 		"drift": false, "drift_dir": 0, "drift_time": 0.0,
 		"gauge": 0.0, "boosts": 0, "boost_t": 0.0, "mini_t": 0.0, "window_t": 0.0,
 		"slip": 0.0, "offroad": false, "events": [],
-		"steer_s": 0.0, "recover": 1.0,
+		"steer_s": 0.0, "recover": 1.0, "prev_key": false, "tap_cd": 0.0,
 	}
 
 static func fwd(yaw: float) -> Vector2:
@@ -94,9 +100,16 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 	var backward := sp > 0.3 and vel.dot(fwd(yaw)) < 0.0
 	if backward:
 		sp = -sp
-		va = yaw
+		va = atan2(-vel.x, -vel.y)   # 뒤로 갈 때는 '움직이는 반대 방향'을 기준으로
 	var top := top_speed(k, st)
+	# 후진 드리프트: 뒤로 가면서 드리프트 키 + 방향키 → 뒤가 미끄러지며 크게 돈다 (벽에서 돌려 나오기)
+	var rev_drift: bool = backward and sp < -3.0 and inp.get("drift", false) and absf(raw) > 0.3
 
+	# ── 드리프트 키를 새로 눌렀나 (톡톡이)
+	var key: bool = inp.get("drift", false)
+	var key_tap: bool = key and not bool(k.get("prev_key", false))
+	k.prev_key = key
+	k.tap_cd = maxf(0.0, float(k.get("tap_cd", 0.0)) - dt)
 	# ── 드리프트 시작: 드리프트 키 + 방향키 + 어느 정도 속력 (방향은 누른 키 그대로)
 	var was_drift: bool = k.drift
 	if inp.get("drift", false) and not k.drift and absf(raw) > 0.3 and sp > DRIFT_MIN_SPEED:
@@ -104,6 +117,13 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 		k.drift_dir = 1 if raw > 0.0 else -1
 		k.drift_time = 0.0
 		k.events.append("drift_start")
+		_tap_bonus(k, st, sp)
+	elif k.drift and key_tap and sp > 18.0 and k.tap_cd <= 0.0:
+		# 톡톡이: 드리프트 중에 키를 다시 톡 → 살짝 더 돌고 게이지 덤
+		k.yaw_rate = float(k.yaw_rate) - float(k.drift_dir) * TAP_KICK
+		k.gauge += TAP_CHUNK * st.drift_gain * (BOOST_GAUGE if boosting(k) else 1.0)
+		k.tap_cd = TAP_COOLDOWN
+		k.events.append("drift_tap")
 
 	# ── 코를 돌리는 빠르기(목표)와 따라가는 빠르기
 	var target_w := 0.0
@@ -130,11 +150,13 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 			# 키를 떼고 카운터: 코를 가는 방향 쪽으로 되돌리며 빨리 편다
 			target_w = dir * st.turn * 0.35
 			grip = 9.0
+			resp = 10.0
 			ending = true
 		elif push < 0.3:
 			# 손을 다 떼면 천천히 펴진다
 			target_w = -dir * st.turn * 0.08
 			grip = 7.0
+			resp = 9.0
 			ending = true
 		else:
 			var amt2 := 0.62 + 0.42 * push
@@ -143,6 +165,9 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 		var low := clampf(absf(sp) / 7.0, 0.35, 1.0)   # 멈춰 있어도 조금은 돈다
 		var high := 1.0 - 0.22 * clampf(sp / st.max_speed, 0.0, 1.2)
 		target_w = -steer * st.turn * low * high * (-1.0 if backward else 1.0)
+		if rev_drift:
+			target_w *= 1.9
+			resp = 8.0
 		# 드리프트가 막 끝났으면 접지가 천천히 돌아온다
 		k.recover = minf(1.0, float(k.recover) + dt / RECOVER_TIME)
 		var rc: float = k.recover
@@ -152,11 +177,8 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 	yaw = wrapf(yaw + float(k.yaw_rate) * dt, -PI, PI)
 
 	# ── 가는 방향이 코를 따라간다
-	if not backward:
-		var slip0 := wrapf(va - yaw, -PI, PI)
-		va = yaw + slip0 * exp(-grip * dt)
-	else:
-		va = yaw
+	var slip0 := wrapf(va - yaw, -PI, PI)
+	va = yaw + slip0 * exp(-(2.6 if rev_drift else grip) * dt)
 	var slip := wrapf(va - yaw, -PI, PI)
 	var along := cos(slip)                      # 코 방향으로 힘이 얼마나 실리나
 
@@ -173,7 +195,6 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 			sp = maxf(0.0, sp - 38.0 * dt)
 		else:
 			sp = maxf(-9.0, sp - 14.0 * dt)
-			va = yaw
 	else:
 		sp = move_toward(sp, 0.0, 5.0 * dt)
 	if sp > top:  # 부스터가 끝났거나 잔디에 들어가면 천천히 최고 속력으로
@@ -186,7 +207,7 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 	if k.drift:
 		# 게이지: 미끄러지는 만큼 (작게 미끄러져도 조금씩 찬다 → 직선에서 톡톡 쳐서 모으는 커팅)
 		if absf(slip) > 0.03:
-			k.gauge += st.drift_gain * (0.3 + 0.7 * clampf(absf(slip) / 0.4, 0.0, 1.0)) * clampf(sp / 20.0, 0.0, 1.0) * dt
+			k.gauge += st.drift_gain * gauge_mult(k) * (0.3 + 0.7 * clampf(absf(slip) / 0.4, 0.0, 1.0)) * clampf(sp / 20.0, 0.0, 1.0) * dt
 		var dir2 := float(k.drift_dir)
 		var held: bool = inp.get("drift", false)
 		if held and k.drift_time > 0.1 and slip * dir2 < -0.04 and steer * dir2 < -0.3:
@@ -194,7 +215,8 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 			k.drift_dir = -int(dir2)
 			k.drift_time = 0.0
 			k.events.append("drift_flip")
-		elif (ending and absf(slip) < 0.1) or sp < 6.0 or (not held and k.drift_time > 0.12 and slip * dir2 < -0.05):
+			_tap_bonus(k, st, sp)
+		elif (ending and absf(slip) < 0.12) or sp < 6.0 or (not held and k.drift_time > 0.12 and slip * dir2 < -0.05):
 			k.drift = false
 	if was_drift and not k.drift:
 		k.events.append("drift_end")
@@ -230,6 +252,19 @@ static func step(k: Dictionary, inp: Dictionary, st: Dictionary, dt: float) -> v
 	k.boost_t = maxf(0.0, k.boost_t - dt)
 	k.mini_t = maxf(0.0, k.mini_t - dt)
 	k.window_t = maxf(0.0, k.window_t - dt)
+
+## 드리프트를 걸 때(톡톡이·커팅·끌기로 다시 걸 때)마다 덤. 빠를 때만, 바로 전 드리프트가 조금은 가라앉은 뒤에만 (연타 막기)
+static func _tap_bonus(k: Dictionary, st: Dictionary, sp: float) -> void:
+	if sp > 18.0 and float(k.get("tap_cd", 0.0)) <= 0.0:
+		k.gauge += TAP_CHUNK * st.drift_gain * (BOOST_GAUGE if boosting(k) else 1.0)
+		k.tap_cd = TAP_COOLDOWN
+
+## 게이지 배율: 드리프트를 건 직후(톡톡이·커팅·끌기로 다시 걸 때)는 더 빨리, 부스터 중에는 1.5배
+static func gauge_mult(k: Dictionary) -> float:
+	var m := 1.0 + TAP_BONUS * exp(-float(k.drift_time) / TAP_TIME)
+	if boosting(k):
+		m *= BOOST_GAUGE
+	return m
 
 ## 출발 부스터: 출발(0초)까지 남은 시간이 `left`일 때 가속을 처음 눌렀다면 부스터 길이, 아니면 0
 static func start_boost(left: float) -> float:
@@ -573,3 +608,37 @@ static func net_decode(code: String) -> Dictionary:
 	if not (d.has("t") and d.has("s") and d.has("c")) or typeof(d.c) != TYPE_ARRAY:
 		return {}
 	return d
+
+# ────────────────────────── 방 코드 ──────────────────────────
+
+const ROOM_CHARS := "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   ## 헷갈리는 0·O·1·I·L 뺌
+const ROOM_LEN := 6
+
+static func room_new(rng: RandomNumberGenerator) -> String:
+	var c := ""
+	for i in ROOM_LEN:
+		c += ROOM_CHARS[rng.randi_range(0, ROOM_CHARS.length() - 1)]
+	return c
+
+## 사람이 친 방 코드를 다듬는다 (소문자·띄어쓰기·하이픈 허용). 맞지 않으면 ""
+static func room_clean(t: String) -> String:
+	var out := ""
+	for ch in t.to_upper():
+		if ch in ROOM_CHARS:
+			out += ch
+	return out if out.length() == ROOM_LEN else ""
+
+## 중계에 쌓인 글 중 마지막 "O:"(초대) 또는 "A:"(답장)
+static func relay_pick(body: String, prefix: String) -> String:
+	var found := ""
+	for line in body.split("\n", false):
+		var j := JSON.new()
+		if j.parse(line) != OK or typeof(j.data) != TYPE_DICTIONARY:
+			continue
+		var d: Dictionary = j.data
+		if str(d.get("event", "message")) != "message":
+			continue
+		var m := str(d.get("message", ""))
+		if m.begins_with(prefix):
+			found = m.substr(prefix.length())
+	return found
