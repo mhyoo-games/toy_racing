@@ -73,7 +73,11 @@ func _title() -> void:
 	v.add_child(UI.button("둘이서 (화면 나누기)", func(): _pick_mode("duo"), 340))
 	v.add_child(UI.button("친구와 온라인 (코드로 연결)", func(): Game.mode = "online"; show_screen("online"), 340))
 	v.add_child(UI.button("차고 · 카트 상점", func(): garage_who = 1; garage_pick = ""; show_screen("garage"), 340))
-	v.add_child(UI.button("조작 방법", func(): show_screen("help"), 340))
+	var hrow := HBoxContainer.new()
+	hrow.add_theme_constant_override("separation", 10)
+	hrow.add_child(UI.button("조작 방법", func(): show_screen("help"), 165, 24))
+	hrow.add_child(UI.button("라이선스", _licenses, 165, 24))
+	v.add_child(hrow)
 	var snd := UI.button("소리: " + ("끔" if Sound.muted else "켬"), func(): pass, 340)
 	snd.pressed.connect(func():
 		Sound.set_muted(not Sound.muted)
@@ -85,6 +89,21 @@ func _title() -> void:
 	add_child(info)
 	_pin(info, Control.PRESET_BOTTOM_RIGHT, -420, -70, -30, -30)
 	_focus_first(v)
+
+## 만든 것들·라이선스 (Godot 엔진·글꼴·그림)
+func _licenses() -> void:
+	var l: Control = preload("res://scripts/licenses.gd").new()
+	l.credits = [
+		"토이 레이싱 — 유민혁 (minhyuk94)",
+		"게임 엔진: Godot Engine (MIT 라이선스) — godotengine.org/license",
+		"그림: Kenney Mini Forest (CC0 1.0) — kenney.nl",
+		"글꼴: 갈무리 Galmuri (SIL Open Font License 1.1) — github.com/quiple/galmuri",
+		"효과음·곡·카트·도로: 코드로 새로 만듦",
+		"친구와 온라인: 처음 연결 정보만 공개 메시지 중계 ntfy.sh를 거침",
+	]
+	l.font_size = 18
+	l.closed.connect(func(): _focus_first(self))
+	add_child(l)
 
 func _pick_mode(m: String) -> void:
 	Game.mode = m

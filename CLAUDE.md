@@ -8,6 +8,7 @@
 
 ## 지킬 것
 
+- 라이선스 화면: `scripts/licenses.gd`가 Godot 엔진(MIT)과 그 안의 라이브러리(`Engine.get_license_text/get_copyright_info/get_license_info`), 갈무리 글꼴 전문(`assets/fonts/OFL.txt`, 내보내기 `include_filter`에 넣음), 그림 출처를 보여 준다. 처음 화면에서 연다. 상업·무료 상관없이 Godot 배포 조건이라 지우지 않는다. 새 에셋을 쓰면 여기 `credits`에도 적는다.
 - 옛 온라인 카트 레이싱에서 영감을 받았지만 **새로 만든 게임**이다. 다른 게임의 이름·캐릭터·카트·트랙·그림·음악을 쓰지 않고, 다른 회사·게임 이름을 README·화면·이력서에 넣지 않는다.
 - 그림: Kenney Mini Forest(CC0, `assets/forest/LICENSE.txt`)를 트랙 꾸밈·운전수(`character-archer.glb`의 `drive` 동작)로 쓰고, 카트·도로·연석·출발 문은 코드로 만든다(`scripts/kart.gd`, `scripts/track_view.gd`). 글꼴: 갈무리(OFL).
 - 드리프트 소리: 거는 순간 `screech`(끼이익 한 번), 미끄러지는 동안 `skid` 반복 — 미끄러짐 각×속도로 크기·높이가 바뀐다(`Sound.skid`).

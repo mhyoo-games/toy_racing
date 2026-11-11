@@ -62,6 +62,8 @@ func _run() -> void:
 	match plan:
 		"title":
 			await shot("title")
+		"licenses":
+			main().menu._licenses(); await wait(0.6); await shot("licenses")
 		"tracks":
 			Game.mode = "race"
 			main().menu.show_screen("tracks"); await wait(0.5); await shot("tracks")
