@@ -94,7 +94,7 @@ func _title() -> void:
 func _licenses() -> void:
 	var l: Control = preload("res://scripts/licenses.gd").new()
 	l.credits = [
-		"토이 레이싱 — 유민혁 (minhyuk94)",
+		"토이 레이싱 — 심심풀이",
 		"게임 엔진: Godot Engine (MIT 라이선스) — godotengine.org/license",
 		"그림: Kenney Mini Forest (CC0 1.0) — kenney.nl",
 		"글꼴: 갈무리 Galmuri (SIL Open Font License 1.1) — github.com/quiple/galmuri",
